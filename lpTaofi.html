@@ -1,0 +1,2411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>TaoFi LP Tracker</title>
+<script>
+(function(){
+  var CDNS=[
+    'https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js',
+    'https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js',
+    'https://unpkg.com/ethers@5.7.2/dist/ethers.umd.min.js'
+  ];
+  var idx=0;
+  function tryLoad(){
+    if(idx>=CDNS.length){ console.error('✗ All ethers.js CDNs failed'); return; }
+    var url=CDNS[idx], s=document.createElement('script');
+    s.src=url;
+    s.onload=function(){
+      if(typeof initEthersConsts==='function') initEthersConsts();
+    };
+    s.onerror=function(){ idx++; tryLoad(); };
+    document.head.appendChild(s);
+  }
+  tryLoad();
+})();
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#060810;--bg2:#0c1120;--bg3:#111827;--border:#1e2d45;--accent:#00e5ff;--accent2:#7c3aed;--accent3:#10b981;--danger:#ef4444;--warn:#f59e0b;--text:#e2e8f0;--muted:#64748b;--card:#0d1829}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Outfit',sans-serif;min-height:100vh}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(0,229,255,.03)1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.03)1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
+body::after{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(ellipse at 30% 20%,rgba(124,58,237,.08)0%,transparent 50%),radial-gradient(ellipse at 70% 80%,rgba(0,229,255,.05)0%,transparent 50%);pointer-events:none;z-index:0;animation:drift 20s ease-in-out infinite alternate}
+@keyframes drift{from{transform:translate(0,0)}to{transform:translate(-30px,-20px)}}
+/* progress bar non-bloquante */
+.pbar-wrap{position:fixed;top:0;left:0;right:0;z-index:999;display:none;flex-direction:column;pointer-events:none}
+.pbar-wrap.on{display:flex}
+.pbar-track{height:3px;background:var(--border)}
+.pbar-fill{height:3px;background:linear-gradient(90deg,var(--accent2),var(--accent));width:0%;transition:width .4s ease;box-shadow:0 0 8px var(--accent)}
+.pbar-label{background:rgba(6,8,16,.88);color:var(--muted);font-size:10px;font-family:'Space Mono',monospace;padding:4px 12px;letter-spacing:1px}
+.wrap{position:relative;z-index:1;max-width:1280px;margin:0 auto;padding:0 24px 60px}
+header{display:flex;align-items:center;justify-content:space-between;padding:24px 0 28px;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap}
+.logo{display:flex;align-items:center;gap:12px;cursor:pointer;transition:opacity .2s}.logo:hover{opacity:.75}
+.logo-icon{width:40px;height:40px;background:linear-gradient(135deg,var(--accent2),var(--accent));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.logo h1{font-family:'Space Mono',monospace;font-size:17px;font-weight:700;letter-spacing:2px}
+.logo span{display:block;font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;font-family:'Space Mono',monospace;margin-top:2px}
+.hright{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chain-badge{display:flex;align-items:center;gap:7px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:11px;font-family:'Space Mono',monospace;color:var(--muted)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--muted);transition:all .3s}
+.dot.ok{background:var(--accent3);box-shadow:0 0 7px var(--accent3);animation:pd 2s ease-in-out infinite}
+@keyframes pd{0%,100%{opacity:1}50%{opacity:.5}}
+.price-pill{display:flex;align-items:center;gap:7px;font-family:'Space Mono',monospace;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;color:var(--muted)}
+.price-pill strong{color:var(--text);font-size:13px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:none;transition:all .2s;font-family:'Outfit',sans-serif;white-space:nowrap}
+.btn-p{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#000}
+.btn-p:hover{transform:translateY(-1px);box-shadow:0 0 20px rgba(0,229,255,.3)}
+.btn-s{background:var(--bg2);color:var(--text);border:1px solid var(--border)}
+.btn-s:hover{border-color:var(--accent);color:var(--accent)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none!important}
+.page{display:none}.page.on{display:block}
+.search-wrap{display:flex;flex-direction:column;align-items:center;padding:56px 0 40px;text-align:center;gap:20px}
+.hero{width:80px;height:80px;border-radius:20px;background:linear-gradient(135deg,rgba(124,58,237,.15),rgba(0,229,255,.15));border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:36px}
+.search-wrap h2{font-size:30px;font-weight:800;background:linear-gradient(135deg,var(--text),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.search-wrap p{color:var(--muted);max-width:420px;line-height:1.7;font-size:14px}
+.sbox{width:100%;max-width:560px;display:flex;flex-direction:column;gap:8px}
+.sfield{display:flex;background:var(--bg2);border:1.5px solid var(--border);border-radius:12px;overflow:hidden;transition:border-color .2s}
+.sfield:focus-within{border-color:var(--accent)}
+.sfield input{flex:1;background:transparent;border:none;outline:none;padding:15px 18px;font-size:13px;color:var(--text);font-family:'Space Mono',monospace}
+.sfield input::placeholder{color:var(--muted);font-family:'Outfit',sans-serif}
+.sfield button{background:linear-gradient(135deg,var(--accent2),var(--accent));border:none;padding:13px 20px;cursor:pointer;font-size:16px;color:#000;font-weight:700}
+.shint{font-size:11px;color:var(--muted)}
+.chips{display:flex;gap:7px;flex-wrap:wrap;justify-content:center}
+.chip{background:var(--bg2);border:1px solid var(--border);border-radius:99px;padding:5px 12px;font-size:11px;font-family:'Space Mono',monospace;color:var(--muted);cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:5px}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip-fav{border-color:rgba(245,158,11,.35);color:var(--warn)}
+.chip-fav:hover{border-color:var(--warn);color:var(--warn);background:rgba(245,158,11,.07)}
+.chip-x{color:var(--danger);font-size:14px;line-height:1}
+.fav-overlay{display:none;position:fixed;inset:0;background:rgba(6,8,16,.75);z-index:500;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.fav-overlay.on{display:flex}
+.fav-modal{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:24px 28px;width:100%;max-width:400px;box-shadow:0 0 40px rgba(0,0,0,.6)}
+.fav-modal h3{font-size:14px;font-weight:700;margin-bottom:6px}
+.fav-modal .fav-addr{font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:18px;word-break:break-all}
+.fav-modal input{width:100%;background:var(--bg3);border:1.5px solid var(--border);border-radius:8px;outline:none;padding:10px 14px;font-size:13px;color:var(--text);font-family:'Outfit',sans-serif;transition:border-color .2s;margin-bottom:16px}
+.fav-modal input:focus{border-color:var(--accent)}
+.fav-modal-btns{display:flex;gap:8px;justify-content:flex-end}
+.net-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px 20px;text-align:left;width:100%;max-width:420px}
+.net-card h4{font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;font-family:'Space Mono',monospace}
+.nr{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px}
+.nr:last-child{border-bottom:none}
+.nr span:first-child{color:var(--muted)}
+.nr span:last-child{font-family:'Space Mono',monospace;font-size:10px;color:var(--accent)}
+.wbar{display:flex;align-items:center;justify-content:space-between;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 18px;margin:24px 0 0;flex-wrap:wrap;gap:10px}
+.wleft{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
+.wav{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--accent2),var(--accent));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.waddr{font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);word-break:break-all}
+.wsub{font-size:10px;color:var(--muted);margin-top:2px}
+.wstats{display:flex;gap:18px;flex-wrap:wrap}
+.wv{font-weight:700;font-size:14px}.wl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+.nsbar{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 18px;margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.nsbar input{flex:1;min-width:160px;background:var(--bg3);border:1px solid var(--border);border-radius:7px;outline:none;padding:9px 12px;font-size:12px;color:var(--text);font-family:'Space Mono',monospace;transition:border-color .2s}
+.nsbar input:focus{border-color:var(--accent)}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin:18px 0}
+.sc{background:var(--card);border:1px solid var(--border);border-radius:13px;padding:18px;position:relative;overflow:hidden;transition:border-color .3s,transform .2s}
+.sc::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--c,var(--accent)),transparent)}
+.sc:hover{border-color:rgba(0,229,255,.25);transform:translateY(-2px)}
+.slbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:2px;margin-bottom:7px;font-family:'Space Mono',monospace}
+.sval{font-size:24px;font-weight:800;line-height:1}.ssub{font-size:11px;color:var(--muted);margin-top:5px}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:600;margin-top:7px}
+.bg{background:rgba(16,185,129,.15);color:var(--accent3)}.br{background:rgba(239,68,68,.15);color:var(--danger)}
+.by{background:rgba(245,158,11,.15);color:var(--warn)}.bb{background:rgba(0,229,255,.1);color:var(--accent)}
+.sh{display:flex;align-items:center;justify-content:space-between;margin:28px 0 12px}
+.stitle{font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);letter-spacing:3px;text-transform:uppercase}
+.scnt{background:var(--bg2);border:1px solid var(--border);border-radius:99px;padding:2px 9px;font-size:11px;color:var(--muted);font-family:'Space Mono',monospace}
+.synct{font-size:10px;color:var(--muted);font-family:'Space Mono',monospace}
+.plist{display:flex;flex-direction:column;gap:12px}
+.pc{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;transition:border-color .3s}
+.pc:hover{border-color:rgba(0,229,255,.2)}
+.ph{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid transparent;flex-wrap:wrap;gap:10px;cursor:pointer;user-select:none;transition:background .2s}
+.ph:hover{background:rgba(255,255,255,.02)}.ph.open{border-bottom-color:var(--border)}
+.ptitle{display:flex;align-items:center;gap:12px}
+.tpair{display:flex}
+.ti{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid var(--bg)}
+.ti-t{background:linear-gradient(135deg,#1d4ed8,#7c3aed);color:#fff}
+.ti-u{background:linear-gradient(135deg,#2563eb,#0ea5e9);color:#fff;margin-left:-7px}
+.pn{font-weight:700;font-size:15px}.pid{font-size:10px;color:var(--muted);font-family:'Space Mono',monospace}
+.pr{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.pval{font-size:18px;font-weight:800}.chev{color:var(--muted);font-size:16px;transition:transform .3s}.chev.open{transform:rotate(180deg)}
+.pb{padding:18px 20px;display:none}.pb.open{display:block}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-bottom:16px}
+.pi{background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:12px 14px}
+.pi-l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px}
+.pi-v{font-size:16px;font-weight:700}.pi-s{font-size:11px;color:var(--muted);margin-top:2px}
+.rbox{background:var(--bg3);border:1px solid var(--border);border-radius:11px;padding:14px 18px;margin-bottom:14px}
+.rt{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
+.rw{position:relative;height:7px;background:var(--border);border-radius:99px;margin:14px 0}
+.rf{position:absolute;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:99px;left:0}
+.rtick{position:absolute;top:50%;transform:translate(-50%,-50%);width:13px;height:13px;border-radius:50%;background:#fff;border:2px solid var(--accent);box-shadow:0 0 8px var(--accent)}
+.rl{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);font-family:'Space Mono',monospace}
+.bt{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:9px}
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.fi{background:var(--bg3);border:1px solid rgba(16,185,129,.15);border-radius:9px;padding:12px 14px}
+.fl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px}
+.fv{font-size:16px;font-weight:700;color:var(--accent3)}.fu{font-size:11px;color:var(--muted);margin-top:2px}
+.ilr{display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:9px 12px;margin-bottom:7px}
+.ill{font-size:12px;color:var(--muted);min-width:120px}
+.ilt{flex:1;height:5px;background:var(--border);border-radius:99px;overflow:hidden}
+.ilf{height:100%;border-radius:99px}.ilv{font-size:12px;font-weight:700;min-width:55px;text-align:right}
+.empty{text-align:center;padding:50px 20px;color:var(--muted);background:var(--card);border:1px dashed var(--border);border-radius:14px}
+.empty .ei{font-size:44px;margin-bottom:14px}.empty h3{font-size:16px;color:var(--text);margin-bottom:7px}
+.empty p{font-size:13px;line-height:1.6;max-width:360px;margin:0 auto}
+/* debug — toujours visible */
+.pc-closed{opacity:.65}.pc-closed:hover{opacity:.9}
+.closed-tag{background:rgba(239,68,68,.12);color:var(--danger);border:1px solid rgba(239,68,68,.2);border-radius:99px;padding:2px 8px;font-size:10px;font-weight:600}
+.dbg{background:#0a0f1a;border:1px solid #1e3a5f;border-radius:10px;padding:14px 16px;margin-top:20px;font-family:'Space Mono',monospace;font-size:10.5px;max-height:300px;overflow-y:auto}
+.dbg-title{color:#64748b;letter-spacing:2px;text-transform:uppercase;font-size:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.dbg-actions{display:flex;gap:6px;flex-shrink:0}
+.dbg-line{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.03);line-height:1.6;word-break:break-all}
+.dbg-line.ok{color:#10b981}.dbg-line.err{color:#ef4444}.dbg-line.warn{color:#f59e0b}.dbg-line.info{color:#4a6080}
+.overlay{display:none;position:fixed;inset:0;background:rgba(6,8,16,.9);z-index:998;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.overlay.on{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:18px;padding:28px;width:100%;max-width:480px;box-shadow:0 20px 70px rgba(0,0,0,.6);animation:mi .25s ease;max-height:90vh;overflow-y:auto}
+@keyframes mi{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
+.modal h2{font-size:18px;font-weight:800;margin-bottom:5px}
+.modal .msub{font-size:12px;color:var(--muted);margin-bottom:20px;line-height:1.6}
+.modal .msub a{color:var(--accent);text-decoration:none}
+.cf{margin-bottom:14px}
+.cf label{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px;font-family:'Space Mono',monospace}
+.req{color:var(--danger)}.opt{font-size:9px;background:var(--bg3);border-radius:3px;padding:1px 5px}
+.cf input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:7px;outline:none;padding:10px 12px;font-size:11px;color:var(--text);font-family:'Space Mono',monospace;transition:border-color .2s}
+.cf input:focus{border-color:var(--accent)}.cf input.v{border-color:var(--accent3)}.cf input.e{border-color:var(--danger)}
+.ch{font-size:10px;color:var(--muted);margin-top:4px}
+.ma{display:flex;gap:8px;margin-top:20px}.ma .btn{flex:1;justify-content:center}
+.tw{position:fixed;bottom:20px;right:20px;z-index:1000;display:flex;flex-direction:column;gap:7px;align-items:flex-end}
+.toast{background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:10px 16px;font-size:12px;box-shadow:0 6px 24px rgba(0,0,0,.4);animation:ti .3s ease;display:flex;align-items:center;gap:8px;max-width:380px}
+.toast.success{border-color:rgba(16,185,129,.4)}.toast.error{border-color:rgba(239,68,68,.4)}.toast.warn{border-color:rgba(245,158,11,.4)}
+@keyframes ti{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
+.ss58-warn{display:none;}
+.price-delta{font-size:9px;padding:1px 5px;border-radius:99px;background:rgba(245,158,11,.15);color:var(--warn)}
+.price-delta.up{background:rgba(16,185,129,.12);color:var(--accent3)}
+@media(max-width:580px){.sgrid{grid-template-columns:1fr 1fr}.wstats{display:none}.sval{font-size:18px}}
+</style>
+</head>
+<body>
+
+
+<div class="pbar-wrap" id="pbar">
+  <div class="pbar-track"><div class="pbar-fill" id="pbarFill"></div></div>
+  <div class="pbar-label" id="pbarLabel">Loading…</div>
+</div>
+<div class="tw" id="tw"></div>
+
+<div class="overlay" id="cfgOverlay">
+  <div class="modal">
+    <h2>⚙️ TaoFi Contracts</h2>
+    <div class="msub">Bittensor EVM (chain 964) — <a href="https://evm.taostats.io" target="_blank">evm.taostats.io</a></div>
+    <div class="cf"><label>NonfungiblePositionManager <span class="req">*</span></label><input id="ci0" placeholder="0x..." maxlength="42" oninput="vcf(this)"><div class="ch">Uniswap V3 NFT Manager for TaoFi</div></div>
+    <div class="cf"><label>Pool TAO/USDC <span class="req">*</span></label><input id="ci1" placeholder="0x..." maxlength="42" oninput="vcf(this)"></div>
+    <div class="cf"><label>USDC <span class="req">*</span></label><input id="ci2" placeholder="0x..." maxlength="42" oninput="vcf(this)"></div>
+    <div class="cf"><label>WTAO <span class="opt">optional</span></label><input id="ci3" placeholder="0x..." maxlength="42" oninput="vcf(this)"></div>
+    <div class="ma">
+      <button class="btn btn-s" onclick="closeCfg()">Cancel</button>
+      <button class="btn btn-p" onclick="saveCfg()">💾 Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <header>
+    <div class="logo" onclick="goSearch()">
+      <div class="logo-icon">⚡</div>
+      <div><h1>TAOFI TRACKER</h1><span>Bittensor EVM · LP Monitor</span></div>
+    </div>
+    <div class="hright">
+      <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-end">
+        <div class="price-pill">TAO/USDC <strong id="taoPrice">—</strong></div>
+        <div id="cgPrice" style="font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;text-align:right"></div>
+      </div>
+      <div class="chain-badge"><div class="dot" id="dot"></div><span id="chainLbl">Chain 964</span></div>
+      <button class="btn btn-s" onclick="openCfg()" style="padding:8px 12px">⚙️</button>
+    </div>
+  </header>
+
+  <div class="page on" id="pgSearch">
+    <div class="search-wrap">
+      <div class="hero">🌊</div>
+      <h2>Explore LP Positions</h2>
+      <p>Enter an EVM address to view its TAO/USDC positions on TaoFi — no wallet connection required.</p>
+      <div class="sbox">
+        <div class="sfield">
+          <input id="inp" type="text" placeholder="0x... EVM address (H160) or SS58" maxlength="64"
+            onkeydown="if(event.key==='Enter'&&typeof doSearch==='function'){doSearch(this.value);}"
+            oninput="onAddrInput(this)">
+          <button onclick="if(typeof doSearch==='function'){doSearch(document.getElementById('inp').value);}">🔍</button>
+        </div>
+        <div class="shint">Press Enter or click 🔍</div>
+        <div id="ss58warn" style="display:none;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--warn);line-height:1.6;max-width:500px;text-align:left">⚠️ <strong>Substrate address (SS58) detected.</strong> TaoFi uses <strong>EVM H160</strong> addresses (0x…).<br>Convert on <a href="https://evm.taostats.io" target="_blank" style="color:var(--accent)">evm.taostats.io ↗</a> → <em>Address Converter</em> — or use your MetaMask/Rabby address directly.</div>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="net-card">
+        <h4>⚙️ Bittensor EVM Network</h4>
+        <div class="nr"><span>Chain ID</span><span>964</span></div>
+        <div class="nr"><span>RPC</span><span>lite.chain.opentensor.ai</span></div>
+        <div class="nr"><span>NftManager</span><span id="cfgA">—</span></div>
+        <div class="nr"><span>Pool</span><span id="cfgB">—</span></div>
+        <div class="nr"><span>NFT Method</span><span>Transfer events</span></div>
+        <div class="nr"><span>token0 / token1</span><span>WTAO(18) / USDC(6)</span></div>
+      </div>
+    </div>
+  </div>
+
+
+
+  <div class="page" id="pgDash">
+    <div class="wbar">
+      <div class="wleft">
+        <div class="wav">🔍</div>
+        <div>
+          <div class="waddr" id="wAddr">0x…</div>
+          <div class="wsub" id="wName">Bittensor EVM · Read only</div>
+        </div>
+      </div>
+      <div class="wstats">
+        <div><div class="wv" id="wTao">—</div><div class="wl">Native TAO</div></div>
+        <div><div class="wv" id="wUsdc">—</div><div class="wl">USDC</div></div>
+        <div><div class="wv" id="wPos">—</div><div class="wl">NFTs</div></div>
+      </div>
+    </div>
+    <div class="nsbar">
+      <span style="font-size:12px;color:var(--muted);white-space:nowrap">🔍 Address:</span>
+      <input id="inp2" type="text" placeholder="0x..." maxlength="42" onkeydown="if(event.key==='Enter'&&typeof doSearch==='function'){doSearch(this.value);}">
+      <button class="btn btn-p" id="btnSearch" onclick="doSearch(document.getElementById('inp2').value)" style="font-size:12px">Analyze</button>
+      <button class="btn btn-s" id="btnRefresh" onclick="doRefresh()" style="font-size:12px">🔄</button>
+      <button class="btn btn-s" id="btnFav" onclick="openFavModal()" style="font-size:12px" title="Add to favorites">⭐</button>
+      <button class="btn btn-s" onclick="goSearch()" style="font-size:12px">← Back</button>
+      <span class="synct" id="synct"></span>
+    </div>
+    <div class="sgrid">
+      <div class="sc" style="--c:#00e5ff"><div class="slbl">Total LP Value</div><div class="sval" id="stV">$—</div><div class="ssub" id="stS">…</div></div>
+      <div class="sc" style="--c:#10b981"><div class="slbl">Unclaimed Fees</div><div class="sval" id="stF">$—</div><div class="badge bg" id="stFb">0.3% / swap</div></div>
+      <div class="sc" style="--c:#f59e0b"><div class="slbl">Avg. IL</div><div class="sval" id="stIL">—</div><div class="badge by" id="stILb">Enter entry price</div></div>
+      <div class="sc" style="--c:#7c3aed"><div class="slbl">TAO Price (pool)</div><div class="sval" id="stP">$—</div><div class="ssub" id="stPsub">Loading...</div></div>
+      <div class="sc" style="--c:#10b981"><div class="slbl">Collected Fees (hist.)</div><div class="sval" id="stFC">$—</div><div class="ssub" id="stFCsub" style="font-size:10px">Auto-scan via getLogs</div><div class="ssub" style="font-size:9px;color:var(--muted);margin-top:2px">USD at current TAO price</div></div>
+    </div>
+    <div id="poolStatsBar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;margin-bottom:6px;font-size:11px"></div>
+    <div class="sh">
+      <div class="stitle">🟢 Active Positions</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="synct" id="synct2"></span>
+        <span class="scnt" id="posCount">0 position</span>
+      </div>
+    </div>
+    <div class="plist" id="plist">
+      <div class="empty"><div class="ei">🔄</div><h3>Waiting</h3></div>
+    </div>
+    <div class="sh" id="shClosed" style="display:none">
+      <div class="stitle">🔴 Closed Positions</div>
+      <span class="scnt" id="posCountClosed">0</span>
+    </div>
+    <div class="plist" id="plistClosed" style="display:none"></div>
+    <div class="dbg" id="dbgPanel">
+      <div class="dbg-title">
+        <span>🛠 Execution Log</span>
+        <div class="dbg-actions">
+          <button class="btn btn-s" onclick="copyLog()" id="btnCopy" style="padding:2px 8px;font-size:10px">📋 Copy</button>
+          <button class="btn btn-s" onclick="clearDbg()" style="padding:2px 8px;font-size:10px">Clear</button>
+        </div>
+      </div>
+      <div id="dbgLines"><div class="dbg-line info">Waiting for a search…</div></div>
+    </div>
+  </div>
+</div>
+
+<script>'use strict';
+
+// ════════════════════════════════════════════════════════════════════
+//  NETWORK CONSTANTS
+// ════════════════════════════════════════════════════════════════════
+const RPCS = [
+  'https://lite.chain.opentensor.ai',
+  'https://entrypoint-finney.opentensor.ai',
+];
+const NET          = {chainId:964, name:'bittensor'};
+const CALL_TIMEOUT = 28000;  // 28s per call
+const MAX_TRIES    = 6;        // 6 attempts for critical calls
+const LOOP_TRIES   = 5;        // 5 attempts — Bittensor RPC randomly returns data="0x"
+const RETRY_DELAY  = 4000;    // 4s between retries — let the node breathe
+const RPC_DELAY    = 1200;     // 1.2s between sequential calls
+const FAIL_DELAY   = 5000;    // 5s pause after failure
+
+// Multicall3 — batch positions() into a single RPC call
+const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
+const MC3_ABI    = ['function aggregate3(tuple(address target,bool allowFailure,bytes callData)[] calls) view returns (tuple(bool success,bytes returnData)[] returnData)'];
+
+// ═══════════════════════════════════════════════════════════════
+//  TAOSTATS API — replaces all RPC contract calls
+// ═══════════════════════════════════════════════════════════════
+const BASE_API = 'https://evm.taostats.io/api';
+const BASE_V2  = 'https://evm.taostats.io/api/v2';
+const API_TO   = 12000;
+
+async function fetchAPI(url, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms || API_TO);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch(e) { clearTimeout(t); throw e; }
+}
+
+// rpcCall: contract call via RPC (withRetry) — replaces eth_call API
+// TaoStats API does not support module=proxy&action=eth_call (HTTP 400)
+async function rpcCall(to, iface, fn, args, from_, isCancelled=null) {
+  const data = iface.encodeFunctionData(fn, args || []);
+  // Make sure rp is available
+  if (!rp) rp = await getProvider();
+  return withRetry(async () => {
+    const result = await rp.call({ to, data, from: from_ });
+    if (!result || result === '0x') throw new Error('empty result');
+    return iface.decodeFunctionResult(fn, result);
+  }, fn, MAX_TRIES, isCancelled);
+}
+// Alias for backward compatibility
+const apiCall = rpcCall;
+
+// Session cache — avoids re-fetching static metadata
+var _cache = {};
+function cacheGet(k){ return _cache[k]; }
+function cacheSet(k,v){ _cache[k]=v; return v; }
+function cacheDel(k){ delete _cache[k]; }
+
+// ════════════════════════════════════════════════════════════════════
+//  CONFIG
+// ════════════════════════════════════════════════════════════════════
+const CFG_KEY = 'taofi_config';
+
+function initEthersConsts() {
+  MAX128       = ethers.BigNumber.from(2).pow(128).sub(1);
+  SIG_TRANSFER = ethers.utils.id('Transfer(address,address,uint256)');
+  SIG_COLLECT  = ethers.utils.id('Collect(uint256,address,uint256,uint256)');
+  SIG_INC      = ethers.utils.id('IncreaseLiquidity(uint256,uint128,uint256,uint256)');
+  SIG_DEC      = ethers.utils.id('DecreaseLiquidity(uint256,uint128,uint256,uint256)');
+  IFACE_COLLECT= new ethers.utils.Interface([
+    'event Collect(uint256 indexed tokenId,address recipient,uint256 amount0Collect,uint256 amount1Collect)'
+  ]);
+  IFACE_NFT_  = new ethers.utils.Interface(NFT_ABI);
+  IFACE_POOL_ = new ethers.utils.Interface(POOL_ABI);
+  dbg && dbg('ethers consts initialized ✓','ok');
+}
+let CFG = {
+  NftManager: '0x61EeA4770d7E15e7036f8632f4bcB33AF1Af1e25',
+  Pool:       '0x6647dcbeb030dc8E227D8B1A2Cb6A49F3C887E3c',
+  USDC:       '0xB833E8137FEDf80de7E908dc6fea43a029142F20',
+  WTAO:       '0x9Dc08C6e2BF0F1eeD1E00670f80Df39145529F81',
+};
+try { const s=localStorage.getItem(CFG_KEY); if(s) CFG={...CFG,...JSON.parse(s)}; } catch{}
+
+const T0=18, T1=6;
+var MAX128, IFACE_NFT_, IFACE_POOL_; // initialized after ethers loads
+
+// ════════════════════════════════════════════════════════════════════
+//  ABIs
+// ════════════════════════════════════════════════════════════════════
+const NFT_ABI = [
+  'function balanceOf(address) view returns (uint256)',
+  'function tokenOfOwnerByIndex(address,uint256) view returns (uint256)',
+  'function ownerOf(uint256) view returns (address)',
+  'function positions(uint256) view returns (uint96,address,address,address,uint24,int24,int24,uint128,uint256,uint256,uint128,uint128)',
+  'function collect(tuple(uint256 tokenId,address recipient,uint128 amount0Max,uint128 amount1Max)) payable returns (uint256 amount0,uint256 amount1)',
+  'event Transfer(address indexed,address indexed,uint256 indexed)',
+  'event IncreaseLiquidity(uint256 indexed tokenId,uint128 liquidity,uint256 amount0,uint256 amount1)',
+  'event DecreaseLiquidity(uint256 indexed tokenId,uint128 liquidity,uint256 amount0,uint256 amount1)',
+  'event Collect(uint256 indexed tokenId,address recipient,uint256 amount0Collect,uint256 amount1Collect)',
+];
+const POOL_ABI  = [
+  'function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16,uint16,uint16,uint8,bool)',
+  'function liquidity() view returns (uint128)',
+  'function fee() view returns (uint24)',
+  'function tickSpacing() view returns (int24)',
+];
+const ERC20_ABI = ['function balanceOf(address) view returns (uint256)'];
+
+// Pre-computed event signatures
+var SIG_COLLECT, SIG_INC, SIG_DEC, IFACE_COLLECT; // initialized after ethers loads
+
+// Contract helpers — always recreate with current rp to stay bound to the active provider
+const nft  = () => new ethers.Contract(CFG.NftManager, NFT_ABI,  rp);
+const pool = () => new ethers.Contract(CFG.Pool,       POOL_ABI,  rp);
+const usdc = () => new ethers.Contract(CFG.USDC,       ERC20_ABI, rp);
+
+// ════════════════════════════════════════════════════════════════════
+//  GLOBAL STATE
+// ════════════════════════════════════════════════════════════════════
+let rp = null, curAddr = null, taoPrice = null;
+let positions = [], closedPositions = [];
+// Collected fee history per tokenId
+// { tid: { totalTao, totalUsdc, events: [{date,tao,usdc,tx}] } }
+const collectHist = {};
+const positionMeta = {}; // { tid: {openDate,closeDate,deposits:[],withdrawals:[]} }
+const priceHistCache = {}; // { 'YYYY-MM-DD': priceUSD|null }
+const positionPerf = {};   // { tid: {depositedHistUSD, feesHistUSD, apr, daysOpen, hasHistPrices} }
+var SIG_TRANSFER;
+const blockTsCache = {};
+const HIST = 'taofi_hist';
+
+// ════════════════════════════════════════════════════════════════════
+//  UTILS
+// ════════════════════════════════════════════════════════════════════
+const fmt     = (n,d=2) => n==null||isNaN(n) ? '—' : Number(n).toLocaleString('en-GB',{minimumFractionDigits:d,maximumFractionDigits:d});
+const usd     = n => n==null ? '$—' : '$'+fmt(n);
+const sh      = a => a.slice(0,8)+'…'+a.slice(-6);
+const nowStr  = () => new Date().toLocaleTimeString('en-GB');
+const isAddr  = v => /^0x[0-9a-fA-F]{40}$/.test((v||'').trim());
+const isSS58  = v => /^5[1-9A-HJ-NP-Za-km-z]{46,47}$/.test((v||'').trim());
+function onAddrInput(el){
+  var v=(el.value||'').trim();
+  var warn=document.getElementById('ss58warn');
+  if(isSS58(v)){ el.style.color='var(--warn)'; if(warn) warn.style.display='block'; }
+  else { el.style.color=isAddr(v)||!v?'var(--text)':'var(--danger)'; if(warn) warn.style.display='none'; }
+}
+const shortErr= e => ((e&&e.message)?e.message:String(e)).slice(0,160);
+const sleep   = ms => new Promise(r=>setTimeout(r,ms));
+const race    = (p,ms) => Promise.race([p, new Promise((_,r)=>setTimeout(()=>r(new Error('timeout '+ms+'ms')),ms))]);
+const tidTopic= tid => ethers.utils.hexZeroPad(ethers.BigNumber.from(tid).toHexString(),32);
+
+function toast(msg,type='info',ms=4500){
+  const el=document.createElement('div');
+  el.className='toast '+type;
+  el.innerHTML=`<span>${{success:'✅',error:'❌',info:'ℹ️',warn:'⚠️'}[type]||'ℹ️'}</span><span>${msg}</span>`;
+  document.getElementById('tw').appendChild(el);
+  setTimeout(()=>el.remove(),ms);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PROGRESS BAR
+// ════════════════════════════════════════════════════════════════════
+let _busy = false;
+let _loadGen = 0; // incremented on each cancel — aborts in-flight loads
+
+function cancelLoad() {
+  _loadGen++;
+  _busy = false;
+  progress(null);
+}
+
+function progress(pct, label){
+  const wrap=document.getElementById('pbar'), fill=document.getElementById('pbarFill'), lbl=document.getElementById('pbarLabel');
+  if(pct===null){
+    _busy=false; wrap.classList.remove('on');
+    document.querySelectorAll('#btnSearch,#btnRefresh').forEach(b=>b.disabled=false);
+    return;
+  }
+  _busy=true; wrap.classList.add('on'); fill.style.width=pct+'%';
+  if(label) lbl.textContent=label;
+  document.querySelectorAll('#btnSearch,#btnRefresh').forEach(b=>b.disabled=true);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  DEBUG PANEL
+// ════════════════════════════════════════════════════════════════════
+function dbg(msg, type='info'){
+  const el=document.getElementById('dbgLines'); if(!el) return;
+  const line=document.createElement('div');
+  line.className='dbg-line '+type;
+  line.textContent='['+new Date().toLocaleTimeString('en-GB')+'] '+msg;
+  el.appendChild(line);
+  const p=el.parentElement;
+  if(p.scrollHeight-p.scrollTop<p.clientHeight+60) p.scrollTop=p.scrollHeight;
+  (type==='err'?console.error:type==='warn'?console.warn:console.log)('[TAOFI]',msg);
+}
+function clearDbg(){ document.getElementById('dbgLines').innerHTML='<div class="dbg-line info">Log cleared.</div>'; }
+async function copyLog(){
+  const lines=[...document.querySelectorAll('#dbgLines .dbg-line')].map(l=>l.textContent).join('\n');
+  const btn=document.getElementById('btnCopy');
+  try{ await navigator.clipboard.writeText(lines); }
+  catch(_){ const ta=document.createElement('textarea'); ta.value=lines; ta.style.cssText='position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
+  const orig=btn.textContent;
+  btn.textContent='✓ Copied!'; btn.style.color='var(--accent3)';
+  setTimeout(()=>{btn.textContent=orig;btn.style.color='';},2000);
+  toast('Log copied ✓','success');
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PROVIDER & RETRY
+//
+//  Critical rule: withRetry must NEVER be called in parallel
+//  (Promise.all / Promise.allSettled) — all calls share the same `rp`
+//  global. Concurrent mutations create a race condition that causes
+//  multiple calls to fail over to the same broken RPC node.
+//  → All RPC calls are strictly sequential.
+// ════════════════════════════════════════════════════════════════════
+let _rpcIdx = 0;
+
+async function getProvider(){
+  for(let t=0; t<RPCS.length; t++){
+    const idx=(_rpcIdx+t)%RPCS.length;
+    const url=RPCS[idx];
+    try {
+      dbg('RPC: '+url,'info');
+      const p=new ethers.providers.StaticJsonRpcProvider(url, NET);
+      await race(p.getNetwork(), 8000);
+      dbg('✓ RPC OK: '+url,'ok');
+      _rpcIdx=idx;
+      document.getElementById('dot').classList.add('ok');
+      document.getElementById('chainLbl').textContent='Bittensor EVM · 964';
+      return p;
+    } catch(e){ dbg('✗ '+url+': '+shortErr(e),'warn'); }
+  }
+  dbg('⚠ All RPCs timed out — degraded mode','warn');
+  document.getElementById('dot').classList.remove('ok');
+  document.getElementById('chainLbl').textContent='Unstable RPC';
+  return new ethers.providers.StaticJsonRpcProvider(RPCS[_rpcIdx], NET);
+}
+
+function isRetryable(e){
+  if(e instanceof LoadCancelledError) return false; // never retry a cancelled load
+  if(e.code==='INVALID_ARGUMENT') return false;
+  // CALL_EXCEPTION with empty/0x data = node returned empty → disguised network error
+  if(e.code==='CALL_EXCEPTION'){
+    const d=e.data||''; return d===''||d==='0x'||/missing revert data/i.test(e.message||'');
+  }
+  return /server_error|timeout|network_error|missing response/i.test((e.message||'')+(e.code||''));
+}
+
+// Sentinel error thrown when a load is cancelled — never logged as a real error
+class LoadCancelledError extends Error { constructor(){ super('load cancelled'); this.name='LoadCancelledError'; } }
+
+// withRetry: SEQUENTIAL only — do not call in parallel
+// isCancelled: optional () => bool — exits retry loop immediately if true
+async function withRetry(fn, label='call', tries=MAX_TRIES, isCancelled=null){
+  for(let i=1; i<=tries; i++){
+    if(isCancelled && isCancelled()) throw new LoadCancelledError();
+    try {
+      return await race(fn(), CALL_TIMEOUT);
+    } catch(e){
+      if(e instanceof LoadCancelledError) throw e;
+      if(i===tries||!isRetryable(e)){ dbg('✗ '+label+': '+shortErr(e),'err'); throw e; }
+      dbg('⚠ '+label+' attempt '+i+'/'+tries+'…','warn');
+      // Interruptible sleep: check cancellation every 200ms during the retry delay
+      const steps = Math.ceil(RETRY_DELAY / 200);
+      for(let s=0; s<steps; s++){
+        await sleep(200);
+        if(isCancelled && isCancelled()) throw new LoadCancelledError();
+      }
+      // Sequential failover to the next RPC
+      _rpcIdx=(_rpcIdx+1)%RPCS.length;
+      rp=new ethers.providers.StaticJsonRpcProvider(RPCS[_rpcIdx], NET);
+      dbg('→ RPC: '+RPCS[_rpcIdx],'info');
+    }
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  HISTORIQUE, FAVORIS & NAVIGATION
+// ════════════════════════════════════════════════════════════════════
+const FAV_KEY = 'taofi_favs';
+function getFavs(){ try{ return JSON.parse(localStorage.getItem(FAV_KEY)||'{}'); }catch{ return {}; } }
+function saveFavs(f){ localStorage.setItem(FAV_KEY, JSON.stringify(f)); }
+function isFav(addr){ return !!getFavs()[addr.toLowerCase()]; }
+function getFavName(addr){ const f=getFavs(); return (f[addr.toLowerCase()]||{}).name||null; }
+function addFav(addr, name){
+  const f=getFavs(); f[addr.toLowerCase()]={ name: name||addr, addedAt: Date.now() };
+  saveFavs(f); drawChips(); updateFavBtn();
+}
+function delFav(addr, e){ if(e) e.stopPropagation(); const f=getFavs(); delete f[addr.toLowerCase()]; saveFavs(f); drawChips(); updateFavBtn(); }
+
+function getHist(){ try{return JSON.parse(localStorage.getItem(HIST)||'[]');}catch{return[];} }
+function addHist(a){ let h=getHist().filter(x=>x.toLowerCase()!==a.toLowerCase()); h.unshift(a); localStorage.setItem(HIST,JSON.stringify(h.slice(0,8))); drawChips(); }
+function delHist(a,e){ e.stopPropagation(); localStorage.setItem(HIST,JSON.stringify(getHist().filter(x=>x.toLowerCase()!==a.toLowerCase()))); drawChips(); }
+
+function drawChips(){
+  const favs = getFavs();
+  const hist  = getHist();
+  const el    = document.getElementById('chips');
+  let html = '';
+
+  // ── Section Favoris ──
+  const favEntries = Object.entries(favs).sort((a,b)=> (b[1].addedAt||0)-(a[1].addedAt||0));
+  if(favEntries.length){
+    html += '<span style="font-size:10px;color:var(--warn);font-family:\'Space Mono\',monospace">⭐ Favorites:</span>';
+    html += favEntries.map(([addr, meta]) => {
+      const label = meta.name || sh(addr);
+      const safeAddr = addr.replace(/'/g,"\\'");
+      const safeName = label.replace(/'/g,"\\'").replace(/"/g,'&quot;');
+      return `<div class="chip chip-fav" onclick="doSearch('${safeAddr}')" title="${safeAddr}">
+        <span style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>
+        <span style="font-size:9px;color:var(--muted);font-family:\'Outfit\',sans-serif;margin-left:1px">${sh(addr)}</span>
+        <span style="color:rgba(245,158,11,.5);font-size:11px;padding:0 2px" onclick="openFavModal('${safeAddr}',event)" title="Rename">✎</span>
+        <span class="chip-x" onclick="delFav('${safeAddr}',event)" title="Remove from favorites">×</span>
+      </div>`;
+    }).join('');
+  }
+
+  // ── Recent section (not already in favorites) ──
+  const recent = hist.filter(a => !favs[a.toLowerCase()]);
+  if(recent.length){
+    if(favEntries.length) html += '<span style="display:block;width:100%;height:0"></span>'; // line break
+    html += '<span style="font-size:10px;color:var(--muted);font-family:\'Space Mono\',monospace">Recent:</span>';
+    html += recent.map(a => {
+      const safeA = a.replace(/'/g,"\\'");
+      return `<div class="chip" onclick="doSearch('${safeA}')">${sh(a)}<span class="chip-x" onclick="delHist('${safeA}',event)">×</span></div>`;
+    }).join('');
+  }
+
+  el.innerHTML = html;
+}
+
+// ── Modale favoris ──
+function openFavModal(addr, e){
+  if(e) e.stopPropagation();
+  const target = addr || curAddr;
+  if(!target) return;
+  document.getElementById('favModalAddr').textContent = target;
+  document.getElementById('favOverlay').dataset.addr  = target;
+  const existing = getFavName(target);
+  const inp = document.getElementById('favNameInput');
+  inp.value = existing || '';
+  inp.placeholder = 'Wallet name (e.g. My main wallet)';
+  document.getElementById('favOverlay').classList.add('on');
+  setTimeout(()=>inp.focus(), 80);
+}
+function closeFavModal(){ document.getElementById('favOverlay').classList.remove('on'); }
+function saveFavModal(){
+  const addr = document.getElementById('favOverlay').dataset.addr;
+  const name = document.getElementById('favNameInput').value.trim();
+  if(!addr) return;
+  addFav(addr, name || sh(addr));
+  closeFavModal();
+}
+
+// Updates the ⭐ button and address subtitle on the dashboard
+function updateFavBtn(){
+  if(!curAddr) return;
+  const btn = document.getElementById('btnFav');
+  const nameEl = document.getElementById('wName');
+  const fav = isFav(curAddr);
+  const name = getFavName(curAddr);
+  if(btn){ btn.textContent = fav ? '★' : '⭐'; btn.title = fav ? 'Edit favorite' : 'Add to favorites'; btn.style.color = fav ? 'var(--warn)' : ''; }
+  if(nameEl){ nameEl.textContent = name ? '⭐ '+name : 'Bittensor EVM · Read only'; nameEl.style.color = name ? 'var(--warn)' : ''; }
+}
+function goSearch(){
+  if(_busy) cancelLoad(); // abort any in-flight load
+  curAddr=null; positions=[]; closedPositions=[];
+  document.getElementById('pgSearch').classList.add('on');
+  document.getElementById('pgDash').classList.remove('on');
+  document.getElementById('inp').value='';
+  drawChips();
+}
+function showDash(addr){
+  document.getElementById('pgSearch').classList.remove('on');
+  document.getElementById('pgDash').classList.add('on');
+  document.getElementById('wAddr').textContent=addr;
+  document.getElementById('inp2').value='';
+  updateFavBtn();
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  SEARCH / REFRESH
+// ════════════════════════════════════════════════════════════════════
+let _searchTimer=null;
+function debouncedSearch(raw){
+  clearTimeout(_searchTimer);
+  _searchTimer=setTimeout(function(){ doSearch(raw); }, 150);
+}
+
+async function doSearch(raw){
+  raw=(raw||'').trim();
+  if(!raw){ toast('Enter an address.','warn'); return; }
+  if(isSS58(raw)){ toast('Substrate address (SS58) — enter your EVM address 0x… (MetaMask/Rabby)','warn',7000); return; }
+  if(!isAddr(raw)){ toast('Invalid address.','error'); return; }
+  if(_busy){ toast('Loading…','warn'); return; }
+  if(typeof ethers==='undefined'){ toast('ethers.js not loaded — reload the page','error',8000); return; }
+  if(!MAX128){ try{ initEthersConsts(); }catch(e){ toast('ethers init error: '+e.message,'error'); return; } }
+  let addr;
+  try{ addr=ethers.utils.getAddress(raw); }catch(e){ toast('Invalid address: '+shortErr(e),'error'); return; }
+  curAddr=addr; addHist(addr); showDash(addr);
+  const myGen = ++_loadGen; // capture generation token
+  const cancelled = () => _loadGen !== myGen;
+  try {
+    progress(5,'Connecting RPC…');
+    rp=await getProvider();
+    if(cancelled()) return;
+    progress(20,'TAO price…');    await fetchPrice();
+    if(cancelled()) return;
+    progress(35,'Balances…');      await fetchBalances(addr);
+    if(cancelled()) return;
+    progress(50,'Positions…');   await fetchPositions(addr, myGen);
+    if(cancelled()) return;
+    const t=nowStr();
+    document.getElementById('synct').textContent='Sync: '+t;
+    document.getElementById('synct2').textContent='Sync: '+t;
+    toast('Data loaded ✓','success');
+  } catch(e){
+    if(e instanceof LoadCancelledError){ dbg('doSearch: cancelled ✓','info'); return; }
+    dbg('Error: '+shortErr(e),'err');
+    const msg=/missing response|missing revert data|aucun rpc/i.test(e.message||'')
+      ? 'Bittensor RPC unreachable — try again in a few seconds.'
+      : shortErr(e);
+    toast(msg,'error',8000);
+    const pl=document.getElementById('plist');
+    if(pl&&curAddr) pl.innerHTML=`<div class="empty"><div class="ei">📡</div><h3>RPC unreachable</h3>
+      <p style="margin-bottom:16px">${msg}</p>
+      <button class="btn btn-p" onclick="doSearch('${curAddr}')">🔄 Retry</button></div>`;
+  } finally { progress(null); }
+}
+
+async function doRefresh(){
+  if(!curAddr||_busy) return;
+  try {
+    progress(10,'Refreshing…');
+    if(!rp) rp=await getProvider();
+    progress(25,'Price…');      await fetchPrice();
+    progress(45,'Balances…');    await fetchBalances(curAddr);
+    progress(60,'Positions…'); await fetchPositions(curAddr);
+    const t=nowStr();
+    document.getElementById('synct').textContent='Sync: '+t;
+    document.getElementById('synct2').textContent='Sync: '+t;
+  } catch(e){ toast('Error: '+shortErr(e),'error'); }
+  finally{ progress(null); }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  PRIX & SOLDES
+// ════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
+//  MULTICALL3 — batch positions() into a single RPC call
+//  (TaoFi analysis recommendation: group all calls together)
+// ════════════════════════════════════════════════════════════════════
+async function fetchPositionsMulticall(tokenIds, sqrtP96, curTick, cancelled=null){
+  dbg('positions() via API for '+tokenIds.length+' NFT(s)…','info');
+  var results=[];
+  for(var i=0;i<tokenIds.length;i++){
+    if(cancelled && cancelled()) throw new LoadCancelledError();
+    var tid=tokenIds[i];
+    await new Promise(r=>setTimeout(r,150));
+    try {
+      var p=await apiCall(CFG.NftManager,IFACE_NFT_,'positions',[tid],undefined,cancelled);
+      dbg('positions('+tid+') ✓ [API]','ok');
+      var liq=parseFloat(p[7].toString());
+      var ca=calcAmts(sqrtP96,p[5],p[6],p[7]);
+      var feesTao=parseFloat(ethers.utils.formatUnits(p[10],T0));
+      var feesUsdc=parseFloat(ethers.utils.formatUnits(p[11],T1));
+      // "Ghost" position: residual liquidity but effective USD value < $1 → treat as closed
+      // Use taoPrice if available, otherwise compare raw amounts only
+      var lpUsdEst = taoPrice != null
+        ? ca.taoAmt * taoPrice + ca.usdcAmt + feesTao * taoPrice + feesUsdc
+        : ca.usdcAmt + feesUsdc;  // fallback sans prix TAO
+      var isGhost = liq > 0 && lpUsdEst < 1.0 && (taoPrice != null || (ca.usdcAmt < 1.0 && feesUsdc < 1.0));
+      if(liq>0 && !isGhost){
+        results.push({tid:tid,active:true,closed:false,raw:p});
+      } else {
+        results.push({tid:tid,active:false,closed:true,pos:{
+          tid:String(tid),liq:isGhost?liq:0,tickLow:p[5],tickHigh:p[6],curTick:curTick,inRange:false,
+          taoAmt:ca.taoAmt,usdcAmt:ca.usdcAmt,
+          feesTao,feesUsdc,
+          pLow:t2p(p[5]),pHigh:t2p(p[6])
+        }});
+        if(isGhost) dbg('NFT #'+tid+': ghost position (LP value ≈ $'+lpUsdEst.toFixed(3)+') → closed [API]','warn');
+        else dbg('NFT #'+tid+': CLOSED [API]','ok');
+      }
+    } catch(err){
+      dbg('positions('+tid+'): '+shortErr(err),'warn');
+      results.push({tid:tid,active:false,closed:false,burned:true});
+    }
+  }
+  return results;
+}
+async function fetchPrice(){
+  try {
+    const s0=await apiCall(CFG.Pool, IFACE_POOL_, 'slot0');
+    const sqrtP=parseFloat(s0[0].toString())/Math.pow(2,96);
+    let price=sqrtP*sqrtP*Math.pow(10,T0-T1);
+    if(price<0.5||price>1e6) price=1/(sqrtP*sqrtP)/Math.pow(10,T0-T1);
+    taoPrice=price;
+    dbg('TAO price: $'+price.toFixed(2)+' (tick='+s0[1]+') [API]','ok');
+    document.getElementById('taoPrice').textContent='$'+fmt(price);
+    document.getElementById('stP').textContent='$'+fmt(price);
+    document.getElementById('stPsub').textContent='Tick: '+s0[1]+' · TaoFi Pool';
+    fetchPoolStats().catch(function(){});
+  } catch(e){ dbg('fetchPrice: '+shortErr(e),'err'); document.getElementById('stPsub').textContent='Price error'; }
+  fetchCGPrice().catch(function(){});
+}
+
+// ─── CoinGecko — source externe non-bloquante ───────────────────
+var cgPrice=null, cgEur=null;
+async function fetchCGPrice(){
+  try {
+    var cached=cacheGet('cg');
+    if(cached){ cgPrice=cached.usd; cgEur=cached.eur; updateCGDisplay(); return; }
+    var r=await Promise.race([
+      fetch('https://api.coingecko.com/api/v3/simple/price?ids=bittensor&vs_currencies=usd,eur'),
+      new Promise(function(_,rj){ setTimeout(function(){ rj(new Error('cg timeout')); },8000); })
+    ]);
+    var d=await r.json();
+    if(d&&d.bittensor){ cgPrice=(d.bittensor&&d.bittensor.usd)||null; cgEur=(d.bittensor&&d.bittensor.eur)||null;
+      cacheSet('cg',{usd:cgPrice,eur:cgEur});
+      setTimeout(function(){ cacheDel('cg'); },120000);
+      updateCGDisplay(); dbg('CoinGecko: $'+cgPrice+' / €'+cgEur,'ok'); }
+  } catch(err){ dbg('CoinGecko: '+shortErr(err),'warn'); }
+}
+function updateCGDisplay(){
+  var el=document.getElementById('cgPrice'); if(!el) return;
+  if(cgPrice&&taoPrice){
+    var delta=((taoPrice-cgPrice)/cgPrice*100);
+    var sign=delta>=0?'+':'';
+    el.innerHTML='<span style="opacity:.6">CG</span> $'+fmt(cgPrice)
+      +(cgEur?' · €'+fmt(cgEur):'')
+      +'<span style="margin-left:5px;font-size:9px;padding:1px 5px;border-radius:99px;background:rgba(245,158,11,.15);color:var(--warn)">'+sign+fmt(delta,1)+'% vs pool</span>';
+  }
+}
+
+// ─── Pool stats — fee rate, tick spacing ────────────────────────
+var poolStats={fee:null,tickSpacing:null};
+async function fetchPoolStats(){
+  try {
+    if(cacheGet('poolstats')){ poolStats=cacheGet('poolstats'); renderPoolStats(); return; }
+    // fee and tickSpacing are immutable — single fetch only
+    // Sequential to avoid parallel RPC conflicts
+    // Fallback to known TaoFi pool values (0.3%, spacing=60)
+    var fee=3000, ts=60;
+    try { const fr=await apiCall(CFG.Pool,IFACE_POOL_,'fee'); fee=Number(fr[0]); } catch(e){ dbg('fee → default 3000','warn'); }
+    await new Promise(r=>setTimeout(r,400));
+    try { const tsr=await apiCall(CFG.Pool,IFACE_POOL_,'tickSpacing'); ts=Number(tsr[0]); } catch(e){ dbg('tickSpacing → default 60','warn'); }
+    poolStats={fee:fee, tickSpacing:ts, feeRate:(fee/10000).toFixed(2)+'%'};
+    cacheSet('poolstats',poolStats);
+    dbg('Pool: fee='+poolStats.feeRate+' tickSpacing='+poolStats.tickSpacing,'ok');
+    renderPoolStats();
+  } catch(err){ dbg('fetchPoolStats: '+shortErr(err),'warn'); }
+}
+function renderPoolStats(){
+  var el=document.getElementById('poolStatsBar'); if(!el) return;
+  if(!poolStats.fee){ el.innerHTML=''; return; }
+  el.innerHTML='<span style="color:var(--muted);font-size:10px;font-family:monospace;letter-spacing:1px">POOL</span>'
+    +'<span class="badge bb">Fee '+poolStats.feeRate+'</span>'
+    +'<span class="badge bb">TickSpacing '+poolStats.tickSpacing+'</span>'
+    +'<span class="badge bb">TAO/USDC · Uniswap V3</span>'
+    +(cgEur?'<span class="badge bg">€'+fmt(cgEur)+' / TAO</span>':'');
+}
+
+async function fetchBalances(addr){
+  try {
+    const j=await fetchAPI(BASE_API+'?module=account&action=balance&address='+addr+'&tag=latest');
+    document.getElementById('wTao').textContent=fmt(parseFloat(ethers.utils.formatEther(j.result||'0')),4)+' TAO';
+    dbg('TAO balance OK [API]','ok');
+  } catch(e){ dbg('bal TAO: '+shortErr(e),'warn'); }
+  try {
+    const j=await fetchAPI(BASE_API+'?module=account&action=tokenbalance&contractaddress='+CFG.USDC+'&address='+addr+'&tag=latest');
+    document.getElementById('wUsdc').textContent=fmt(parseFloat(ethers.utils.formatUnits(j.result||'0',T1)),2)+' USDC';
+    dbg('USDC balance OK [API]','ok');
+  } catch(e){ dbg('bal USDC: '+shortErr(e),'warn'); }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  TOKEN IDs — sequential, no parallelism
+//  S1 : tokenOfOwnerByIndex
+//  S2 : ownerOf scan (fallback)
+// ════════════════════════════════════════════════════════════════════
+const MAX_OWNEROF_SCAN = 2000;
+
+async function getTokenIds(addr, expectedBal){
+  const limit = expectedBal && expectedBal !== '?' ? expectedBal : 200;
+
+  // Strategy 1: Blockscout v2 API (no RPC, instant)
+  try {
+    dbg('NFT token IDs via API v2…','info');
+    let items=[], next=null, page=0;
+    do {
+      let url=BASE_V2+'/tokens/'+CFG.NftManager+'/instances?holder_address_hash='+addr;
+      if(next) url+='&'+Object.entries(next).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
+      const json=await fetchAPI(url,15000);
+      if(json.items&&json.items.length){ items.push(...json.items); dbg('  v2 page '+(++page)+' → '+json.items.length+' NFT(s)','ok'); }
+      next=json.next_page_params||null;
+    } while(next);
+    if(items.length>0){
+      const ids=items.map(i=>String(i.id));
+      dbg('✓ API v2 → '+ids.length+' NFT(s): '+ids.join(', '),'ok');
+      return ids;
+    }
+    dbg('API v2 → 0 results, fallback tokenOfOwnerByIndex','warn');
+  } catch(e){ dbg('API v2 NFT → '+shortErr(e)+', fallback','warn'); }
+
+  // Strategy 2: tokenOfOwnerByIndex via RPC
+  dbg('tokenOfOwnerByIndex via RPC…','info');
+  const ids=[];
+  for(let i=0;i<limit;i++){
+    progress(Math.round(62+(i/limit)*22),'Token '+(i+1)+'/'+limit+'…');
+    try {
+      const res=await apiCall(CFG.NftManager,IFACE_NFT_,'tokenOfOwnerByIndex',[addr,i]);
+      ids.push(res[0].toString());
+      dbg('  index '+i+' → #'+res[0],'ok');
+    } catch(e){ dbg('  index '+i+' → end','info'); break; }
+    await new Promise(r=>setTimeout(r,150));
+  }
+  dbg('✓ tokenOfOwnerByIndex API → '+ids.length+' NFT(s)','ok');
+  return ids;
+}
+// ════════════════════════════════════════════════════════════════════
+//  FETCH POSITIONS — 100% sequential
+// ════════════════════════════════════════════════════════════════════
+async function fetchPositions(addr, gen){
+  const cancelled = () => gen !== undefined && _loadGen !== gen;
+  const list=document.getElementById('plist');
+  list.innerHTML='<div class="empty"><div class="ei">🔄</div><h3>Searching for NFTs…</h3><p>Check the log below</p></div>';
+  try {
+    // 1. balanceOf
+    progress(52,'balanceOf (API)…');
+    let totalNfts='?';
+    try {
+      const bj=await fetchAPI(BASE_API+'?module=account&action=tokenbalance&contractaddress='+CFG.NftManager+'&address='+addr+'&tag=latest');
+      totalNfts=parseInt(bj.result)||0;
+      dbg('balanceOf='+totalNfts+' [API]','ok');
+    } catch(e){ dbg('nft balanceOf: '+shortErr(e),'warn'); }
+    document.getElementById('wPos').textContent=totalNfts+' NFTs';
+    dbg('balanceOf = '+totalNfts,'ok');
+
+    if(totalNfts===0){
+      list.innerHTML='<div class="empty"><div class="ei">💧</div><h3>No positions</h3><p>No LP NFT for this address.</p></div>';
+      document.getElementById('posCount').textContent='0 position';
+      updateGlobal([]); return;
+    }
+
+    // 2. slot0 via API
+    progress(54,'slot0 (API)…');
+    if(cancelled()) return;
+    const s0=await apiCall(CFG.Pool,IFACE_POOL_,'slot0',undefined,undefined,cancelled);
+    const sqrtP96=s0[0], curTick=s0[1];
+
+    // 3. Token IDs
+    progress(58,'Fetching token IDs…');
+    if(cancelled()) return;
+    const tokenIds=await getTokenIds(addr, totalNfts);
+    if(cancelled()) return;
+
+    if(tokenIds.length===0){
+      list.innerHTML='<div class="empty"><div class="ei">⚠️</div><h3>No NFT found</h3><p>balanceOf='+totalNfts+' but 0 IDs retrieved.</p></div>';
+      updateGlobal([]); return;
+    }
+
+    document.getElementById('wPos').textContent=tokenIds.length+' NFTs';
+    progress(80,'Reading positions…');
+    list.innerHTML='<div class="empty"><div class="ei">🔄</div><h3>Loading '+tokenIds.length+' position(s)…</h3></div>';
+
+    // 4. positions() — Multicall3 batch, sequential fallback
+    positions=[]; closedPositions=[];
+    const activeEntries=[];
+
+    progress(82,'Multicall3 positions()…');
+    if(cancelled()) return;
+    const posResults=await fetchPositionsMulticall(tokenIds, sqrtP96, curTick, cancelled);
+    if(cancelled()) return;
+    for(const r of posResults){
+      if(r.active){ activeEntries.push({tid:r.tid, p:r.raw}); }
+      else if(r.closed){ closedPositions.push({tid:String(r.tid), loaded:true, pos:r.pos}); }
+      else { closedPositions.push({tid:String(r.tid), loaded:false, pos:null, burned:r.burned}); }
+    }
+    dbg('batch: '+activeEntries.length+' active(s), '+closedPositions.length+' closed','ok');
+    // 5. collect() on ACTIVE positions only
+    progress(93,'Active fees (callStatic.collect)…');
+    dbg('collect() on '+activeEntries.length+' active position(s) only','info');
+    for(const entry of activeEntries){
+      if(cancelled()) return;
+      await sleep(RPC_DELAY);
+      const {taoAmt,usdcAmt}=calcAmts(sqrtP96,entry.p[5],entry.p[6],entry.p[7]);
+      let feesTao=parseFloat(ethers.utils.formatUnits(entry.p[10],T0));
+      let feesUsdc=parseFloat(ethers.utils.formatUnits(entry.p[11],T1));
+      try {
+        const cr=await apiCall(CFG.NftManager,IFACE_NFT_,'collect',
+          [{tokenId:ethers.BigNumber.from(entry.tid),recipient:addr,amount0Max:MAX128,amount1Max:MAX128}],addr,cancelled);
+        feesTao=parseFloat(ethers.utils.formatUnits(cr[0],T0));
+        feesUsdc=parseFloat(ethers.utils.formatUnits(cr[1],T1));
+        dbg('collect('+entry.tid+') ✓ TAO='+feesTao.toFixed(6)+' [API]','ok');
+      } catch(err){
+        if(err instanceof LoadCancelledError) throw err; // propagate cancellation
+        dbg('collect('+entry.tid+') → tokensOwed fallback','warn');
+      }
+      const liq=parseFloat(entry.p[7].toString());
+      const curT=curTick;
+      const pos={
+        tid:String(entry.tid),liq,
+        tickLow:entry.p[5],tickHigh:entry.p[6],curTick:curT,
+        inRange:curT>=entry.p[5]&&curT<entry.p[6],
+        taoAmt,usdcAmt,feesTao,feesUsdc,
+        pLow:t2p(entry.p[5]),pHigh:t2p(entry.p[6])
+      };
+      dbg('NFT #'+entry.tid+': '+(pos.inRange?'✓ range':'✗ out of range')
+        +' TAO='+taoAmt.toFixed(4)+' USDC='+usdcAmt.toFixed(2),'ok');
+      positions.push(pos);
+    }
+
+    const cnt=positions.length, cntC=closedPositions.length;
+    document.getElementById('wPos').textContent=tokenIds.length+' NFTs';
+    document.getElementById('posCount').textContent=cnt+' position'+(cnt>1?'s':'');
+    document.getElementById('posCountClosed').textContent=cntC+' position'+(cntC>1?'s':'');
+
+    if(cnt===0&&cntC===0){
+      list.innerHTML='<div class="empty"><div class="ei">💧</div><h3>Aucune position</h3></div>';
+      updateGlobal([]); return;
+    }
+    if(cnt===0) list.innerHTML='<div class="empty"><div class="ei">💧</div><h3>No active positions</h3><p>All positions are closed.</p></div>';
+    else renderPos(positions);
+    renderClosed(closedPositions);
+    updateGlobal(positions);
+    dbg('✓ '+cnt+' active(s), '+cntC+' closed — background fees scan','ok');
+    // Automatic background fee scan (non-blocking)
+    const allIds = [...positions.map(p=>p.tid), ...closedPositions.map(p=>p.tid)];
+    scanAllCollectHistory(allIds, gen).catch(e=>dbg('fees scan: '+shortErr(e),'warn'));
+
+  } catch(err){
+    if(err instanceof LoadCancelledError){ dbg('fetchPositions: cancelled ✓','info'); return; }
+    dbg('fetchPositions: '+shortErr(err),'err');
+    list.innerHTML='<div class="empty"><div class="ei">⚠️</div><h3>Error</h3><p>'+shortErr(err)+'</p></div>';
+    toast('Error: '+shortErr(err),'error');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  MATH
+// ════════════════════════════════════════════════════════════════════
+const t2p = tick => Math.pow(1.0001,tick)*Math.pow(10,T0-T1);
+
+function calcAmts(sqrtP96BN,tl,th,liqBN){
+  try {
+    const L=parseFloat(liqBN.toString());
+    const sp=parseFloat(sqrtP96BN.toString())/Math.pow(2,96);
+    const sl=Math.pow(1.0001,tl/2), sh=Math.pow(1.0001,th/2);
+    let r0=0,r1=0;
+    if(sp<=sl)      r0=L*(1/sl-1/sh);
+    else if(sp>=sh) r1=L*(sh-sl);
+    else           {r0=L*(1/sp-1/sh); r1=L*(sp-sl);}
+    return {taoAmt:r0/1e18, usdcAmt:r1/1e6};
+  } catch{ return {taoAmt:0, usdcAmt:0}; }
+}
+
+// IL — Uniswap V2 formula (fallback — manual price entry)
+function calcIL(entry, cur) {
+  if (!entry || !cur) return null;
+  const r = cur / entry;
+  return ((2 * Math.sqrt(r) / (1 + r)) - 1) * 100;
+}
+
+// IL — Uniswap V3 based on real on-chain amounts
+// depTao/depUsdc : deposited tokens (IncreaseLiquidity events)
+// curTao/curUsdc : current tokens in pool (active) OR withdrawn tokens (closed)
+// price : TAO/USD price at evaluation time
+// Returns { ilPct, hodlUsd, lpUsd } or null
+function calcILv3(depTao, depUsdc, curTao, curUsdc, price) {
+  if (!price || price <= 0) return null;
+  if (depTao <= 0 && depUsdc <= 0) return null;
+  const hodlUsd = depTao * price + depUsdc;
+  const lpUsd   = curTao * price + curUsdc;
+  if (hodlUsd <= 0) return null;
+  return { ilPct: ((lpUsd - hodlUsd) / hodlUsd) * 100, hodlUsd, lpUsd };
+}
+
+// ════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════
+//  COLLECTED FEES & DATES
+// ════════════════════════════════════════════════════════════════════
+
+
+// ════════════════════════════════════════════════════════════════════
+//  RENDER ACTIVE POSITIONS
+// ════════════════════════════════════════════════════════════════════
+function renderPos(list){
+  const el=document.getElementById('plist'); el.innerHTML='';
+  list.forEach((pos,i)=>{
+    const tv =taoPrice!=null?pos.usdcAmt+pos.taoAmt*taoPrice:null;
+    const fv =taoPrice!=null?pos.feesUsdc+pos.feesTao*taoPrice:null;
+    const cp =taoPrice||((pos.pLow+pos.pHigh)/2);
+    const cl =Math.max(pos.pLow,Math.min(pos.pHigh,cp));
+    const rng=pos.pHigh-pos.pLow;
+    const rp2=rng>0?((cl-pos.pLow)/rng)*100:50;
+    const inb=pos.inRange?'<span class="badge bg">● In range</span>':'<span class="badge br">● Out of range</span>';
+    const c=document.createElement('div'); c.className='pc';
+    c.innerHTML=`
+<div class="ph" onclick="tog(${i})" id="ph${i}">
+  <div class="ptitle">
+    <div class="tpair"><div class="ti ti-t">T</div><div class="ti ti-u">U</div></div>
+    <div><div class="pn">TAO/USDC <span style="font-size:11px;font-weight:400;color:var(--muted)">0.3%</span></div>
+    <div class="pid">NFT #${pos.tid} · Uniswap V3 · TaoFi</div></div>
+  </div>
+  <div class="pr">${inb}<span id="roi-badge-${pos.tid}"></span><div class="pval">${tv!=null?usd(tv):'—'}</div><div class="chev" id="cv${i}">▼</div></div>
+</div>
+<div class="pb" id="pb${i}">
+  <div id="pos-dates-${pos.tid}" style="font-size:11px;color:var(--muted);margin-bottom:10px;font-family:monospace;min-height:18px">
+    <span style="opacity:.5">⏳ Loading dates…</span>
+  </div>
+  <div class="pgrid">
+    <div class="pi"><div class="pi-l">TAO in position</div><div class="pi-v">${fmt(pos.taoAmt,4)}</div><div class="pi-s">${taoPrice?'≈ '+usd(pos.taoAmt*taoPrice):''}</div></div>
+    <div class="pi"><div class="pi-l">USDC in position</div><div class="pi-v">${fmt(pos.usdcAmt,2)}</div><div class="pi-s">${usd(pos.usdcAmt)}</div></div>
+    <div class="pi"><div class="pi-l">Current TAO price</div><div class="pi-v" style="font-size:14px">$${fmt(cp)}</div><div class="pi-s">${pos.inRange?'✓ In range':'⚠ Out of range'}</div></div>
+    <div class="pi"><div class="pi-l">Pending fees</div><div class="pi-v" style="font-size:13px;color:var(--accent3)">${fv!=null?usd(fv):'—'}</div><div class="pi-s">${fmt(pos.feesTao,4)} TAO · ${fmt(pos.feesUsdc,2)} USDC</div></div>
+  </div>
+  <div class="rbox">
+    <div class="rt">📊 TAO/USDC Price Range</div>
+    <div class="rw"><div class="rf" style="width:${rp2}%"></div><div class="rtick" style="left:${rp2}%"></div></div>
+    <div class="rl"><span>Min $${fmt(pos.pLow)}</span><span style="color:var(--accent)">Current $${fmt(cp)}</span><span>Max $${fmt(pos.pHigh)}</span></div>
+  </div>
+  <div id="il-auto-${pos.tid}" style="margin-top:12px;margin-bottom:8px">
+  <div style="margin-top:12px;background:rgba(0,217,245,.04);border:1px solid rgba(0,217,245,.1);border-radius:8px;padding:10px 14px">
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;font-family:monospace;text-transform:uppercase;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center">
+      <span>📋 Full History</span>
+      <a href="https://evm.taostats.io/token/${CFG.NftManager}/instance/${pos.tid}" target="_blank" rel="noopener"
+        style="color:var(--muted);font-size:10px;text-decoration:none" title="Voir sur TaoStats">NFT#${pos.tid} ↗</a>
+    </div>
+    <div id="hist-nft-${pos.tid}" style="min-height:28px">
+      <div style="color:var(--muted);font-size:11px;display:flex;align-items:center;gap:6px">
+        <span style="animation:pd 1s infinite">⏳</span> Scanning…
+      </div>
+    </div>
+  </div>
+</div>`;
+    el.appendChild(c);
+  });
+}
+
+function tog(i){
+  const b=document.getElementById('pb'+i), h=document.getElementById('ph'+i), c=document.getElementById('cv'+i);
+  const o=b.classList.contains('open');
+  b.classList.toggle('open',!o); h.classList.toggle('open',!o); c.classList.toggle('open',!o);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  COLLECTED FEES — ACTIVE POSITIONS
+// ════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
+//  RENDER CLOSED POSITIONS
+// ════════════════════════════════════════════════════════════════════
+function renderClosed(list){
+  const shEl=document.getElementById('shClosed'), el=document.getElementById('plistClosed');
+  if(!list.length){ shEl.style.display='none'; el.style.display='none'; return; }
+  shEl.style.display='flex'; el.style.display='flex'; el.innerHTML='';
+  list.forEach((entry,i)=>{
+    const {tid,loaded,pos,burned}=entry;
+    const hasFees=loaded&&pos&&(pos.feesTao>0||pos.feesUsdc>0);
+    const fv=(loaded&&pos&&taoPrice!=null)?pos.feesUsdc+pos.feesTao*taoPrice:null;
+    const c=document.createElement('div'); c.className='pc pc-closed'; c.id='card-c'+i;
+    c.innerHTML=`
+<div class="ph" onclick="togC(${i})" id="phc${i}">
+  <div class="ptitle">
+    <div class="tpair"><div class="ti ti-t">T</div><div class="ti ti-u">U</div></div>
+    <div>
+      <div class="pn">TAO/USDC <span style="font-size:11px;font-weight:400;color:var(--muted)">0.3%</span>
+        <span class="closed-tag" style="margin-left:6px">Closed</span></div>
+      <div class="pid">NFT #${tid} · ${burned?'NFT burned':'liquidity withdrawn'}</div>
+    </div>
+  </div>
+  <div class="pr">
+    ${!loaded?'<span class="badge bb">Click to load</span>':hasFees?'<span class="badge by">⚠ Uncollected fees</span>':'<span class="badge bb">Empty</span>'}
+    <div class="pval" style="font-size:14px;color:var(--muted)">${fv!=null&&hasFees?usd(fv):'—'}</div>
+    <div class="chev" id="cvc${i}">▼</div>
+  </div>
+</div>
+<div class="pb" id="pbc${i}">
+  <div id="detail-c${i}" style="color:var(--muted);font-size:12px;padding:12px 0;text-align:center">Click to load details…</div>
+</div>`;
+    el.appendChild(c);
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  LAZY LOAD CLOSED POSITIONS — sequential
+// ════════════════════════════════════════════════════════════════════
+const closedLoading=new Set();
+
+async function togC(i){
+  const b=document.getElementById('pbc'+i), h=document.getElementById('phc'+i), cv=document.getElementById('cvc'+i);
+  if(b.classList.contains('open')){ b.classList.remove('open'); h.classList.remove('open'); cv.classList.remove('open'); return; }
+  b.classList.add('open'); h.classList.add('open'); cv.classList.add('open');
+  const entry=closedPositions[i]; if(!entry) return;
+  const detEl=document.getElementById('detail-c'+i);
+  if(detEl&&detEl.dataset.rendered) return;
+  if(closedLoading.has(i)) return;
+  closedLoading.add(i);
+  if(detEl) detEl.innerHTML='<div style="display:flex;align-items:center;gap:8px;padding:12px 0"><span style="animation:pd 1s infinite">⏳</span> Loading on-chain…</div>';
+
+  try {
+    const tid=entry.tid;
+    let pos=entry.pos;
+
+    // Phase 1: positions() + collect() only — fast (2 RPC calls)
+    if(!pos){
+      const p=await apiCall(CFG.NftManager,IFACE_NFT_,'positions',[tid]);
+      // Closed positions: liq=0 so taoAmt/usdcAmt=0, slot0 not needed
+      const {taoAmt,usdcAmt}={taoAmt:0,usdcAmt:0};
+      pos={tid:String(tid),liq:parseFloat(p[7].toString()),tickLow:p[5],tickHigh:p[6],
+           curTick:s0[1],inRange:false,taoAmt,usdcAmt,
+           feesTao:parseFloat(ethers.utils.formatUnits(p[10],T0)),
+           feesUsdc:parseFloat(ethers.utils.formatUnits(p[11],T1)),
+           pLow:t2p(p[5]),pHigh:t2p(p[6])};
+      closedPositions[i].pos=pos; closedPositions[i].loaded=true;
+    }
+
+    // For a closed position (liq=0), collect() always reverts.
+    // Use tokensOwed0/1 from positions() directly — already in pos.feesTao/Usdc.
+    if(pos.liq > 0) {
+      try {
+        const cr=await apiCall(CFG.NftManager,IFACE_NFT_,'collect',
+          [{tokenId:ethers.BigNumber.from(tid),recipient:curAddr,amount0Max:MAX128,amount1Max:MAX128}],curAddr);
+        pos.feesTao=parseFloat(ethers.utils.formatUnits(cr[0],T0));
+        pos.feesUsdc=parseFloat(ethers.utils.formatUnits(cr[1],T1));
+      } catch(err){ dbg('collect lazy #'+tid+': '+shortErr(err),'warn'); }
+    } else {
+      dbg('NFT #'+tid+' closed (liq=0) — fees from tokensOwed: TAO='+pos.feesTao.toFixed(6)+' USDC='+pos.feesUsdc.toFixed(4),'ok');
+    }
+
+    const fv=taoPrice!=null?pos.feesUsdc+pos.feesTao*taoPrice:null;
+    const hasFees=pos.feesTao>0||pos.feesUsdc>0;
+    const cp=taoPrice||((pos.pLow+pos.pHigh)/2);
+
+    detEl.dataset.rendered='1';
+    const _meta = positionMeta[String(tid)];
+    const _openStr  = _meta && _meta.openDate  ? '<span style="color:var(--accent3)">📅 Opened: ' + _meta.openDate  + '</span>' : '';
+    const _closeStr = _meta && _meta.closeDate ? ' &nbsp;→&nbsp; <span style="color:var(--danger)">🔒 Closed: ' + _meta.closeDate + '</span>' : '';
+    // Duration in days from first deposit to withdrawal
+    const _deps = (_meta && _meta.deposits  || []).filter(e=>e.ts).sort((a,b)=>a.ts-b.ts);
+    const _wits = (_meta && _meta.withdrawals|| []).filter(e=>e.ts).sort((a,b)=>b.ts-a.ts);
+    const _durDays = (_deps.length && _wits.length)
+      ? Math.round((_wits[0].ts - _deps[0].ts) / 86400) : null;
+    detEl.innerHTML=`
+${_openStr||_closeStr ? '<div style="font-size:11px;font-family:monospace;margin-bottom:10px;min-height:18px" id="pos-dates-'+tid+'">' + _openStr + _closeStr + '</div>'
+  : '<div style="font-size:11px;font-family:monospace;margin-bottom:10px;min-height:18px;color:var(--muted)" id="pos-dates-'+tid+'"><span style="opacity:.5">⏳ Loading dates…</span></div>'}
+<div class="pgrid" style="margin-bottom:12px">
+  <div class="pi"><div class="pi-l">Range Min</div><div class="pi-v" style="font-size:15px">$${fmt(pos.pLow)}</div></div>
+  <div class="pi"><div class="pi-l">Range Max</div><div class="pi-v" style="font-size:15px">$${fmt(pos.pHigh)}</div></div>
+  <div class="pi"><div class="pi-l">Duration</div><div class="pi-v" style="font-size:15px">${_durDays!=null?_durDays+'d':'—'}</div><div class="pi-s">of the position</div></div>
+  ${hasFees?`<div class="pi"><div class="pi-l">Unclaimed Fees</div><div class="pi-v" style="font-size:13px;color:var(--warn)">${fv!=null?usd(fv):'—'}</div><div class="pi-s">${fmt(pos.feesTao,4)} TAO · ${fmt(pos.feesUsdc,2)} USDC</div></div>`:''}
+</div>
+<div style="margin-top:2px;background:rgba(0,217,245,.04);border:1px solid rgba(0,217,245,.1);border-radius:8px;padding:10px 14px">
+  <div style="font-size:10px;color:var(--muted);margin-bottom:8px;font-family:monospace;text-transform:uppercase;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center">
+    <span>📋 History & Performance</span>
+    <a href="https://evm.taostats.io/token/${CFG.NftManager}/instance/${tid}" target="_blank" rel="noopener"
+      style="color:var(--muted);font-size:10px;text-decoration:none">NFT#${tid} ↗</a>
+  </div>
+  <div id="hist-nft-${tid}">
+    ${collectHist[String(tid)]
+      ? buildCollectHistHTML(tid, collectHist[String(tid)])
+      : '<div style="color:var(--muted);font-size:11px;display:flex;align-items:center;gap:6px"><span style="animation:pd 1s infinite">⏳</span> Scanning…</div>'
+    }
+  </div>
+</div>`;
+
+    h.querySelector('.pr').innerHTML=`
+      ${hasFees?'<span class="badge by">⚠ Uncollected fees</span>':'<span class="badge bb">Empty</span>'}
+      <div class="pval" style="font-size:14px;color:var(--muted)">${fv!=null&&hasFees?'$'+fmt(fv):'$0'}</div>
+      <div class="chev open" id="cvc${i}">▼</div>`;
+
+    dbg('togC #'+tid+' ✓ — history available via button','ok');
+
+  } catch(err){
+    dbg('lazy-closed #'+closedPositions[i].tid+': '+shortErr(err),'err');
+    if(detEl) detEl.innerHTML='<div style="color:var(--danger);font-size:12px;padding:12px 0">⚠ Error: '+shortErr(err)+'</div>';
+  } finally { closedLoading.delete(i); }
+}
+
+// Phase 2 (on-demand): explorer link — getLogs not supported by Bittensor RPCs
+
+// ════════════════════════════════════════════════════════════════
+//  COLLECTED FEE HISTORY — via TaoStats getLogs API
+//  Collect(uint256 indexed tokenId, address recipient,
+//          uint256 amount0Collect, uint256 amount1Collect)
+// ════════════════════════════════════════════════════════════════
+
+async function fetchCollectHistory(tid) {
+  if (collectHist[tid]) return collectHist[tid]; // cache session
+  const tidTopic = ethers.utils.hexZeroPad(
+    ethers.BigNumber.from(tid).toHexString(), 32
+  );
+  // Attempt 1: getLogs with topic0 + topic1 + opr=and
+  // Attempt 2: getLogs with topic0 only + client-side filtering (fallback if topic1 is ignored)
+  // Attempt 3: API v2 /addresses/{addr}/logs (alternate Blockscout endpoint)
+  let events = [];
+
+  const parseLogs = (logs, filterTid) => {
+    const out = [];
+    for (const log of (logs || [])) {
+      // Verify topic1 = our tokenId (client-side filter if server ignores it)
+      if (filterTid) {
+        const t1 = (log.topics && log.topics[1]) ? log.topics[1].toLowerCase() : '';
+        const expected = tidTopic.toLowerCase();
+        if (t1 !== expected) continue;
+      }
+      try {
+        const raw = (log.data || '').slice(2);
+        // data = 32B recipient + 32B amount0 + 32B amount1
+        const amount0 = ethers.BigNumber.from('0x' + raw.slice(64, 128));
+        const amount1 = ethers.BigNumber.from('0x' + raw.slice(128, 192));
+        const tao  = parseFloat(ethers.utils.formatUnits(amount0, T0));
+        const usdc = parseFloat(ethers.utils.formatUnits(amount1, T1));
+        const ts   = parseInt(log.timeStamp || log.timestamp || '0', 16);
+        const date = ts ? new Date(ts * 1000).toLocaleDateString('en-GB',
+          {day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit'}) : '?';
+        out.push({ date, tao, usdc, tx: log.transactionHash, block: parseInt(log.blockNumber, 16), ts });
+      } catch(_) {}
+    }
+    return out;
+  };
+
+  // Attempt 1: topic0 + topic1 + opr=and (standard Etherscan format)
+  try {
+    let page = 1;
+    while (true) {
+      const url = BASE_API
+        + '?module=logs&action=getLogs'
+        + '&fromBlock=0&toBlock=latest'
+        + '&address=' + CFG.NftManager
+        + '&topic0=' + SIG_COLLECT
+        + '&topic1=' + tidTopic
+        + '&topic0_1_opr=and'
+        + '&page=' + page + '&offset=1000';
+      const json = await fetchAPI(url, 15000);
+      dbg('getLogs e1 NFT#'+tid+' st='+json.status+' msg='+json.message+' n='+(json.result?json.result.length:0), 'info');
+      if (json.status === '1' && json.result && json.result.length) {
+        events.push(...parseLogs(json.result, false));
+        if (json.result.length < 1000) break;
+        page++;
+      } else break;
+    }
+    if (events.length > 0) {
+      dbg('getLogs e1 NFT#'+tid+' → '+events.length+' events', 'ok');
+    }
+  } catch(e) { dbg('getLogs e1 NFT#'+tid+': '+shortErr(e), 'warn'); }
+
+  // Attempt 2: topic0 only + client-side filter — MAX 5 pages, stop after 2 consecutive empty pages
+  if (events.length === 0) {
+    try {
+      let page = 1, emptyStreak = 0, MAX_PAGES_E2 = 5;
+      while (page <= MAX_PAGES_E2) {
+        const url = BASE_API
+          + '?module=logs&action=getLogs'
+          + '&fromBlock=0&toBlock=latest'
+          + '&address=' + CFG.NftManager
+          + '&topic0=' + SIG_COLLECT
+          + '&page=' + page + '&offset=1000';
+        const json = await fetchAPI(url, 20000);
+        if (json.status === '1' && json.result && json.result.length) {
+          const filtered = parseLogs(json.result, true);
+          events.push(...filtered);
+          if (filtered.length === 0) { emptyStreak++; } else { emptyStreak = 0; }
+          // 2 consecutive pages with no match → no point continuing
+          if (emptyStreak >= 2) { dbg('getLogs e2 NFT#'+tid+' → 0 match over 2 pages, aborting', 'warn'); break; }
+          if (json.result.length < 1000) break;
+          page++;
+        } else break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      if (events.length > 0) dbg('getLogs e2 NFT#'+tid+' → '+events.length+' events', 'ok');
+    } catch(e) { dbg('getLogs e2 NFT#'+tid+': '+shortErr(e), 'warn'); }
+  }
+
+  // Attempt 3: API v2 /addresses/{addr}/logs (alternate Blockscout format)
+  if (events.length === 0) {
+    try {
+      let next = null, loops = 0;
+      while (loops++ < 20) {
+        let url = BASE_V2 + '/addresses/' + CFG.NftManager + '/logs'
+          + '?topic=' + SIG_COLLECT;
+        if (next) url += '&' + Object.entries(next).map(([k,v]) => k+'='+encodeURIComponent(v)).join('&');
+        const json = await fetchAPI(url, 20000);
+        const items = json.items || [];
+        dbg('v2 logs e3 NFT#'+tid+' n='+items.length, 'info');
+        if (items.length) {
+          const filtered = parseLogs(items.map(it => ({
+            data: it.data, topics: it.topics,
+            transactionHash: it.tx_hash,
+            blockNumber: it.block_number ? '0x'+it.block_number.toString(16) : '0x0',
+            timeStamp: it.timestamp ? '0x'+(new Date(it.timestamp).getTime()/1000|0).toString(16) : '0x0',
+          })), true);
+          events.push(...filtered);
+          dbg('  → '+filtered.length+'/'+items.length+' pour NFT#'+tid, 'info');
+        }
+        next = json.next_page_params || null;
+        if (!next) break;
+        await new Promise(r => setTimeout(r, 300));
+      }
+      if (events.length > 0) dbg('v2 logs e3 NFT#'+tid+' → '+events.length+' events', 'ok');
+    } catch(e) { dbg('v2 logs e3 NFT#'+tid+': '+shortErr(e), 'warn'); }
+  }
+
+  const totalTao  = events.reduce((s, e) => s + e.tao,  0);
+  const totalUsdc = events.reduce((s, e) => s + e.usdc, 0);
+  const result = { totalTao, totalUsdc, events };
+  collectHist[String(tid)] = result;
+  return result;
+}
+
+// Background scan — does not block the UI, updates cards progressively
+
+// ════════════════════════════════════════════════════════════════
+//  POSITION METADATA: dates, deposits, withdrawals
+//  Transfer(from=0)         → open date (mint)
+//  Transfer(to=0 or other)  → close date (burn/transfer)
+//  IncreaseLiquidity        → capital deposits
+//  DecreaseLiquidity        → capital withdrawals
+// ════════════════════════════════════════════════════════════════
+async function fetchPositionMeta(tid) {
+  if (positionMeta[String(tid)]) return positionMeta[String(tid)];
+  const tidTopic = ethers.utils.hexZeroPad(ethers.BigNumber.from(tid).toHexString(), 32);
+  const ZERO_TOPIC = '0x' + '0'.repeat(64);
+
+  const fetchLogs = async (topic0, extra) => {
+    const results = [];
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        let url = BASE_API + '?module=logs&action=getLogs'
+          + '&fromBlock=0&toBlock=latest&address=' + CFG.NftManager
+          + '&topic0=' + topic0
+          + '&topic1=' + tidTopic
+          + '&topic0_1_opr=and&page=1&offset=1000';
+        // For IncreaseLiquidity/DecreaseLiquidity: tokenId is topic1
+        // For Transfer: tokenId is topic3, use different approach
+        if (extra) url = BASE_API + '?module=logs&action=getLogs'
+          + '&fromBlock=0&toBlock=latest&address=' + CFG.NftManager
+          + '&topic0=' + topic0 + extra + '&page=1&offset=1000';
+        const json = await fetchAPI(url, 15000);
+        if (json.status === '1' && json.result && json.result.length) {
+          results.push(...json.result);
+          break;
+        }
+        // Fallback: no topic filter, filter client-side
+        if (attempt === 2) {
+          const url2 = BASE_API + '?module=logs&action=getLogs'
+            + '&fromBlock=0&toBlock=latest&address=' + CFG.NftManager
+            + '&topic0=' + topic0 + '&page=1&offset=1000';
+          const json2 = await fetchAPI(url2, 20000);
+          if (json2.status === '1' && json2.result) {
+            for (const log of json2.result) {
+              // For Inc/Dec: topic1=tokenId. For Transfer: topic3=tokenId
+              const t1 = (log.topics && log.topics[1]) ? log.topics[1].toLowerCase() : '';
+              const t3 = (log.topics && log.topics[3]) ? log.topics[3].toLowerCase() : '';
+              if (t1 === tidTopic.toLowerCase() || t3 === tidTopic.toLowerCase())
+                results.push(log);
+            }
+          }
+        }
+      } catch(e) { dbg('meta logs err: '+shortErr(e),'warn'); }
+    }
+    return results;
+  };
+
+  const tsToDate = (hex) => {
+    const ts = parseInt(hex || '0', 16);
+    if (!ts) return '?';
+    return new Date(ts * 1000).toLocaleDateString('en-GB',
+      {day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
+  };
+  const parseAmounts = (data, dec0, dec1) => {
+    const raw = (data || '').slice(2);
+    if (raw.length < 128) return {a0:0, a1:0};
+    try {
+      const a0 = parseFloat(ethers.utils.formatUnits('0x'+raw.slice(0,64), dec0));
+      const a1 = parseFloat(ethers.utils.formatUnits('0x'+raw.slice(64,128), dec1));
+      return {a0, a1};
+    } catch(_) { return {a0:0, a1:0}; }
+  };
+
+  let openDate='?', closeDate=null, closeDateTs=0;
+  const deposits=[], withdrawals=[];
+
+  // Helper: update closeDate only if this event is more recent
+  const setCloseDate = (date, ts) => {
+    const t = ts ? parseInt(ts, 16) : 0;
+    if (t > closeDateTs) { closeDateTs = t; closeDate = date; }
+    else if (!closeDateTs && date) { closeDate = date; } // fallback when ts unavailable
+  };
+
+  // Transfer events (topic3 = tokenId for Transfer — non-standard topic order)
+  // Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
+  // topic0=sig, topic1=from, topic2=to, topic3=tokenId
+  await (async () => {
+    try {
+      // Try with topic3=tokenId filter
+      let url = BASE_API + '?module=logs&action=getLogs'
+        + '&fromBlock=0&toBlock=latest&address=' + CFG.NftManager
+        + '&topic0=' + SIG_TRANSFER
+        + '&topic3=' + tidTopic
+        + '&topic0_3_opr=and&page=1&offset=100';
+      let json = await fetchAPI(url, 15000);
+      let logs = (json.status==='1' && json.result) ? json.result : [];
+      // Fallback: fetch all Transfers and filter client-side
+      if (!logs.length) {
+        url = BASE_API + '?module=logs&action=getLogs'
+          + '&fromBlock=0&toBlock=latest&address=' + CFG.NftManager
+          + '&topic0=' + SIG_TRANSFER + '&page=1&offset=1000';
+        json = await fetchAPI(url, 20000);
+        logs = [];
+        for (const log of (json.result||[])) {
+          const t3 = log.topics && log.topics[3] ? log.topics[3].toLowerCase() : '';
+          if (t3 === tidTopic.toLowerCase()) logs.push(log);
+        }
+      }
+      // Sort by block
+      logs.sort((a,b) => parseInt(a.blockNumber,16) - parseInt(b.blockNumber,16));
+      for (const log of logs) {
+        const from = log.topics && log.topics[1] ? log.topics[1] : '';
+        const to   = log.topics && log.topics[2] ? log.topics[2] : '';
+        const date = tsToDate(log.timeStamp);
+        const isFromZero = from.replace(/0x0*/,'').length === 0;
+        const isToZero   = to.replace(/0x0*/,'').length === 0;
+        if (isFromZero) { openDate = date; } // mint
+        if (isToZero)   { setCloseDate(date, log.timeStamp); } // burn
+        // Transfer to another address = close if not a burn
+        else if (!isFromZero && !isToZero) {
+          const myAddr = (curAddr||'').toLowerCase();
+          const toAddr = to.slice(-40).toLowerCase();
+          if (myAddr && toAddr !== myAddr) setCloseDate(date, log.timeStamp); // outgoing transfer
+        }
+      }
+    } catch(e) { dbg('Transfer scan NFT#'+tid+': '+shortErr(e),'warn'); }
+  })();
+
+  await new Promise(r=>setTimeout(r,250));
+
+  // IncreaseLiquidity (topic1 = tokenId)
+  const incLogs = await fetchLogs(SIG_INC, null);
+  incLogs.sort((a,b) => parseInt(a.blockNumber,16) - parseInt(b.blockNumber,16));
+  for (const log of incLogs) {
+    // data = liquidity(uint128) + amount0(uint256) + amount1(uint256) = 3×32 bytes
+    const raw = (log.data||'').slice(2);
+    if (raw.length < 192) continue;
+    try {
+      const a0 = parseFloat(ethers.utils.formatUnits('0x'+raw.slice(64,128), T0));
+      const a1 = parseFloat(ethers.utils.formatUnits('0x'+raw.slice(128,192), T1));
+      const date = tsToDate(log.timeStamp);
+      if (!openDate || openDate==='?') openDate = date;
+      deposits.push({date, tao:a0, usdc:a1, tx:log.transactionHash, ts: parseInt(log.timeStamp||'0x0',16)});
+    } catch(_) {}
+  }
+
+  await new Promise(r=>setTimeout(r,250));
+
+  // DecreaseLiquidity (topic1 = tokenId)
+  const decLogs = await fetchLogs(SIG_DEC, null);
+  decLogs.sort((a,b) => parseInt(a.blockNumber,16) - parseInt(b.blockNumber,16));
+  for (const log of decLogs) {
+    const raw = (log.data||'').slice(2);
+    if (raw.length < 192) continue;
+    try {
+      const a0 = parseFloat(ethers.utils.formatUnits('0x'+raw.slice(64,128), T0));
+      const a1 = parseFloat(ethers.utils.formatUnits('0x'+raw.slice(128,192), T1));
+      const date = tsToDate(log.timeStamp);
+      withdrawals.push({date, tao:a0, usdc:a1, tx:log.transactionHash, ts: parseInt(log.timeStamp||'0x0',16)});
+      // Last DecreaseLiquidity = close date if more recent than any Transfer
+      setCloseDate(date, log.timeStamp);
+    } catch(_) {}
+  }
+
+  const meta = { openDate, closeDate, deposits, withdrawals };
+  positionMeta[String(tid)] = meta;
+  return meta;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  TAO HISTORICAL PRICE — CryptoCompare histoday (entire range in one call)
+// ════════════════════════════════════════════════════════════════
+function dayKey(ts) {
+  return new Date(ts * 1000).toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+// Fetches the entire [minTs, maxTs] range in 1–2 histoday calls (max 2000 days/call)
+async function fetchHistoricalPriceRange(allTsSet) {
+  if (!allTsSet.size) return;
+  const tsList = [...allTsSet].filter(Boolean).sort((a,b)=>a-b);
+  const minTs = tsList[0];
+  const maxTs = tsList[tsList.length - 1];
+  const toTs  = Math.floor(new Date(dayKey(maxTs) + 'T23:59:59Z').getTime() / 1000);
+  const days  = Math.ceil((maxTs - minTs) / 86400) + 2; // +2 days of margin
+  try {
+    dbg('CryptoCompare histoday: '+days+' days (1 request)…', 'info');
+    const url = `https://min-api.cryptocompare.com/data/v2/histoday?fsym=TAO&tsym=USD&limit=${Math.min(days,2000)}&toTs=${toTs}`;
+    const resp = await fetchAPI(url, 15000);
+    const data = resp?.Data?.Data || [];
+    let found = 0;
+    for (const pt of data) {
+      if (!pt.time || !pt.close) continue;
+      const dk = dayKey(pt.time);
+      if (priceHistCache[dk] === undefined) {
+        priceHistCache[dk] = pt.close;
+        found++;
+      }
+    }
+    dbg('Historical prices loaded: '+found+' days', 'ok');
+    // Mark requested days absent from response as null (avoids re-fetching)
+    for (const ts of tsList) {
+      const dk = dayKey(ts);
+      if (priceHistCache[dk] === undefined) priceHistCache[dk] = null;
+    }
+  } catch(e) {
+    dbg('CryptoCompare histoday: '+shortErr(e)+' — day-by-day fallback', 'warn');
+    // Fallback: individual requests
+    for (const ts of tsList) {
+      const dk = dayKey(ts);
+      if (priceHistCache[dk] !== undefined) continue;
+      try {
+        const url2 = `https://min-api.cryptocompare.com/data/pricehistorical?fsym=TAO&tsyms=USD&ts=${ts}`;
+        const r2 = await fetchAPI(url2, 10000);
+        priceHistCache[dk] = r2?.TAO?.USD ?? null;
+      } catch(_) { priceHistCache[dk] = null; }
+      await new Promise(r=>setTimeout(r,400));
+    }
+  }
+}
+
+function histPriceFor(ts) {
+  if (!ts) return null;
+  // Try exact day, then D-1 and D+1 if absent
+  const dk  = dayKey(ts);
+  if (priceHistCache[dk] != null) return priceHistCache[dk];
+  const dk1 = dayKey(ts - 86400);
+  if (priceHistCache[dk1] != null) return priceHistCache[dk1];
+  const dk2 = dayKey(ts + 86400);
+  if (priceHistCache[dk2] != null) return priceHistCache[dk2];
+  return null;
+}
+
+// ════════════════════════════════════════════════════════════════
+//  POSITION PERFORMANCE (APR, historical deposit, fees, IL)
+// ════════════════════════════════════════════════════════════════
+// activePosData = { taoAmt, usdcAmt } for an active position, null if closed
+function computePositionPerf(h, m, activePosData) {
+  const collectEvents = (h && h.events) ? h.events : [];
+  const deposits    = m.deposits    || [];
+  const withdrawals = m.withdrawals || [];
+  const withdrawalTxSet = new Set(withdrawals.map(e => (e.tx||'').toLowerCase()));
+  const pureCollects    = collectEvents.filter(e => !withdrawalTxSet.has((e.tx||'').toLowerCase()));
+
+  // Deposited capital valued at historical TAO price (fallback: current price)
+  let depositedHistUSD = 0, depositedKnown = false;
+  for (const dep of deposits) {
+    const p = (dep.ts ? histPriceFor(dep.ts) : null) ?? taoPrice;
+    if (p != null) { depositedHistUSD += dep.usdc + dep.tao * p; depositedKnown = true; }
+  }
+
+  // Pure fees valued at historical TAO price
+  let feesHistUSD = 0, feesKnown = false;
+  for (const ev of pureCollects) {
+    const p = (ev.ts ? histPriceFor(ev.ts) : null) ?? taoPrice;
+    if (p != null) { feesHistUSD += ev.usdc + ev.tao * p; feesKnown = true; }
+  }
+
+  // Fees embedded in withdrawal Collects (same tx as DecreaseLiquidity)
+  // In Uniswap V3, a withdrawal Collect contains capital + accrued fees.
+  // To isolate fees only, subtract the withdrawn capital (DecreaseLiquidity amount).
+  // Note: DecreaseLiquidity amounts represent pure capital.
+  let wcFeesUSD = 0;
+  if (!activePosData) { // closed positions only
+    const wTxSet = new Set(withdrawals.map(e => (e.tx||'').toLowerCase()));
+    const wcEvts = collectEvents.filter(e => wTxSet.has((e.tx||'').toLowerCase()));
+    // Build a map txHash → DecreaseLiquidity amounts (pure capital)
+    const witByTx = {};
+    for (const w of withdrawals) {
+      const key = (w.tx||'').toLowerCase();
+      witByTx[key] = { tao: w.tao, usdc: w.usdc };
+    }
+    for (const ev of wcEvts) {
+      const p = (ev.ts ? histPriceFor(ev.ts) : null) ?? taoPrice;
+      if (p == null) continue;
+      const cap = witByTx[(ev.tx||'').toLowerCase()] || { tao: 0, usdc: 0 };
+      // fees = Collect − DecreaseLiquidity capital (clamped to 0 to avoid negative values)
+      const feeTao  = Math.max(0, ev.tao  - cap.tao);
+      const feeUsdc = Math.max(0, ev.usdc - cap.usdc);
+      wcFeesUSD += feeTao * p + feeUsdc;
+      if (feeTao > 0 || feeUsdc > 0) feesKnown = true;
+    }
+  }
+
+  // For active positions: add pending unclaimed fees
+  let pendingFeesUSD = 0;
+  if (activePosData && taoPrice != null) {
+    pendingFeesUSD = (activePosData.feesTao || 0) * taoPrice + (activePosData.feesUsdc || 0);
+    if (pendingFeesUSD > 0) { feesKnown = true; }
+  }
+  const feesTotalUSD = feesHistUSD + wcFeesUSD + pendingFeesUSD;
+
+  // Duration in days (from first deposit to close or now)
+  const sortedDep = deposits.filter(e=>e.ts).sort((a,b)=>a.ts-b.ts);
+  const firstDepTs = sortedDep.length ? sortedDep[0].ts : null;
+  let daysOpen = null;
+  if (firstDepTs) {
+    const sortedWit = withdrawals.filter(e=>e.ts).sort((a,b)=>b.ts-a.ts);
+    const closeTs = sortedWit.length
+      ? sortedWit[0].ts
+      : Math.floor(Date.now() / 1000);
+    daysOpen = Math.max(1, (closeTs - firstDepTs) / 86400);
+  }
+
+  // APR = (total fees / capital) × (365 / days) × 100
+  // For active positions: collected fees + pending unclaimed fees
+  let apr = null;
+  if (depositedHistUSD > 0 && feesTotalUSD >= 0 && daysOpen > 0) {
+    apr = (feesTotalUSD / depositedHistUSD) * (365 / daysOpen) * 100;
+  }
+
+  // Whether we have at least one real historical price data point
+  const hasHistPrices =
+    deposits.some(e => e.ts && priceHistCache[dayKey(e.ts)] != null) ||
+    pureCollects.some(e => e.ts && priceHistCache[dayKey(e.ts)] != null);
+
+  // ── On-chain IL ──
+  // Total TAO and USDC deposited (gross, without subtracting partial withdrawals)
+  const depTao  = deposits.reduce((s,e)=>s+e.tao, 0);
+  const depUsdc = deposits.reduce((s,e)=>s+e.usdc, 0);
+  let ilData = null;
+
+  if (depTao > 0 || depUsdc > 0) {
+    if (activePosData) {
+      // Active position: compare current LP vs HODL at current price
+      ilData = calcILv3(depTao, depUsdc, activePosData.taoAmt, activePosData.usdcAmt, taoPrice);
+    } else {
+      // Closed position: compare withdrawals vs HODL at close price (or current as fallback)
+      const witTao  = withdrawals.reduce((s,e)=>s+e.tao, 0);
+      const witUsdc = withdrawals.reduce((s,e)=>s+e.usdc, 0);
+      const lastWit = [...withdrawals].filter(e=>e.ts).sort((a,b)=>b.ts-a.ts)[0];
+      const closePrice = (lastWit && histPriceFor(lastWit.ts)) ?? taoPrice;
+      ilData = calcILv3(depTao, depUsdc, witTao, witUsdc, closePrice);
+      if (ilData) ilData.closePrice = closePrice;
+    }
+  }
+
+  // ── ROI ──
+  // Active  : (current LP + historical fees + pending fees − deposited capital) / deposited capital
+  // Closed  : (pure Collects + withdrawal Collects − deposited capital) / deposited capital
+  //           Withdrawal Collects contain EVERYTHING (capital + fees) → no double-counting
+  //           DecreaseLiquidity amounts are NOT used for ROI (capital already included in Collect)
+  let roi = null, roiUsd = null, roiGross = null;
+  if (depositedHistUSD > 0) {
+    if (activePosData) {
+      const lpNowUsd     = taoPrice != null
+        ? activePosData.taoAmt * taoPrice + activePosData.usdcAmt : null;
+      const pendingFees  = taoPrice != null
+        ? (activePosData.feesTao||0) * taoPrice + (activePosData.feesUsdc||0) : 0;
+      // Safety guard: if LP < $1 but withdrawals exist, position is a ghost
+      // → avoid showing misleading ROI, the closed calculation will be more accurate
+      const hasWithdrawals = withdrawals.length > 0;
+      const isEffectivelyEmpty = lpNowUsd != null && lpNowUsd < 1.0 && pendingFees < 1.0;
+      if (lpNowUsd != null && !(isEffectivelyEmpty && hasWithdrawals)) {
+        roiGross = lpNowUsd + feesHistUSD + pendingFees;
+        roiUsd   = roiGross - depositedHistUSD;
+        roi      = (roiUsd / depositedHistUSD) * 100;
+      }
+    } else {
+      // Closed position.
+      // In Uniswap V3: the Collect event contains ALL money withdrawn (capital + fees).
+      // → wcFees (Collect in same tx as DecreaseLiquidity) = withdrawn capital + fees from that withdrawal
+      // → pureCollects = fees only (Collect without DecreaseLiquidity)
+      // Use only Collect events to avoid counting capital twice.
+      const collectEvents2 = (h && h.events) ? h.events : [];
+      const wTxSet2 = new Set(withdrawals.map(e=>(e.tx||'').toLowerCase()));
+      // Withdrawal-linked Collects (capital + fees, all included)
+      const wcFees = collectEvents2.filter(e => wTxSet2.has((e.tx||'').toLowerCase()));
+      const wcFeesUsd = wcFees.reduce((s,e) => {
+        const p = (e.ts ? histPriceFor(e.ts) : null) ?? taoPrice;
+        return p != null ? s + e.usdc + e.tao * p : s;
+      }, 0);
+      // roiGross = pure fees + (capital + fees) from withdrawals = total received
+      roiGross = feesHistUSD + wcFeesUsd;
+      roiUsd   = roiGross - depositedHistUSD;
+      roi      = (roiUsd / depositedHistUSD) * 100;
+    }
+  }
+
+  return { depositedHistUSD, feesHistUSD, wcFeesUSD, feesTotalUSD, pendingFeesUSD, apr, daysOpen, hasHistPrices,
+           depositedKnown, feesKnown, nDeposits: deposits.length, nCollects: pureCollects.length,
+           ilData, depTao, depUsdc, roi, roiUsd, roiGross };
+}
+
+
+async function scanAllCollectHistory(tokenIds, gen) {
+  const cancelled = () => gen !== undefined && _loadGen !== gen;
+  dbg('Full history scan (' + tokenIds.length + ' NFTs)…', 'info');
+
+  // ── Phase 1: fetch fee history + metadata for all NFTs ──
+  const histMap = {}, metaMap = {};
+  for (const tid of tokenIds) {
+    if(cancelled()) { dbg('Scan cancelled (gen change)','warn'); return; }
+    try {
+      histMap[tid]  = await fetchCollectHistory(tid);
+      dbg('Fees NFT#'+tid+': '+histMap[tid].events.length+' events', 'ok');
+      await new Promise(r=>setTimeout(r,200));
+      metaMap[tid] = await fetchPositionMeta(tid);
+      dbg('Meta NFT#'+tid+': open='+metaMap[tid].openDate
+        +' dep='+metaMap[tid].deposits.length+' wit='+metaMap[tid].withdrawals.length, 'ok');
+      renderPositionDates(tid);
+    } catch(e) { dbg('scan NFT#'+tid+': '+shortErr(e),'warn'); }
+    await new Promise(r=>setTimeout(r,200));
+  }
+
+  // ── Update total fees in the global stats card (withdrawals excluded) ──
+  let totalTao = 0, totalUsdc = 0;
+  for (const tid of tokenIds) {
+    const h = histMap[tid] || {events:[]};
+    const m = metaMap[tid] || {};
+    const withdrawalTxSet = new Set((m.withdrawals||[]).map(e=>(e.tx||'').toLowerCase()));
+    const pureEvents = h.events.filter(e => !withdrawalTxSet.has((e.tx||'').toLowerCase()));
+    const excluded = h.events.length - pureEvents.length;
+    if (excluded > 0) dbg('  NFT#'+tid+': '+excluded+' withdrawal collect(s) excluded','warn');
+    totalTao  += pureEvents.reduce((s,e)=>s+e.tao, 0);
+    totalUsdc += pureEvents.reduce((s,e)=>s+e.usdc, 0);
+  }
+  const totalUsd = taoPrice!=null ? (totalUsdc + totalTao * taoPrice) : null;
+  const stFC = document.getElementById('stFC');
+  const stFCsub = document.getElementById('stFCsub');
+  if (stFC) stFC.textContent = totalUsd!=null ? usd(totalUsd) : '$—';
+  if (stFCsub) stFCsub.textContent = 'TAO '+fmt(totalTao,4)+' · USDC '+fmt(totalUsdc,2);
+  dbg('✓ Net fees: $'+(totalUsd?fmt(totalUsd):'—')+' (withdrawals excluded)', 'ok');
+
+  // ── Phase 2: collect all timestamps for the histoday range ──
+  const allTs = new Set();
+  for (const tid of tokenIds) {
+    const h = histMap[tid] || {events:[]};
+    const m = metaMap[tid] || {};
+    const withdrawalTxSet = new Set((m.withdrawals||[]).map(e=>(e.tx||'').toLowerCase()));
+    for (const e of h.events.filter(ev=>!withdrawalTxSet.has((ev.tx||'').toLowerCase()))) {
+      if (e.ts) allTs.add(e.ts);
+    }
+    for (const e of (m.deposits||[]))    if (e.ts) allTs.add(e.ts);
+    for (const e of (m.withdrawals||[])) if (e.ts) allTs.add(e.ts);
+  }
+
+  // ── Phase 3: fetch prices in a single histoday call ──
+  if(cancelled()) { dbg('Scan cancelled before prices','warn'); return; }
+  if (allTs.size > 0) {
+    dbg('Historical TAO prices: '+allTs.size+' operation(s) in range…', 'info');
+    await fetchHistoricalPriceRange(allTs);
+  }
+
+  // ── Phase 4: compute performance per position, refresh display ──
+  if(cancelled()) { dbg('Scan cancelled before perf compute','warn'); return; }
+  for (const tid of tokenIds) {
+    try {
+      const h = histMap[tid] || {events:[]};
+      const m = metaMap[tid] || {};
+      const activePos = positions.find(p => String(p.tid) === String(tid)) || null;
+      positionPerf[String(tid)] = computePositionPerf(h, m, activePos);
+      renderHistoryInPosition(tid);
+      renderAutoIL(tid);
+    } catch(e) { dbg('perf NFT#'+tid+': '+shortErr(e),'warn'); }
+  }
+  // Refresh global IL (on-chain weighted average)
+  updateGlobal(positions);
+  dbg('✓ Full analysis complete (APR + historical prices)', 'ok');
+}
+
+
+
+// Updates the open/close dates displayed in a position card
+function renderPositionDates(tid) {
+  const el = document.getElementById('pos-dates-' + tid);
+  if (!el) return;
+  const m = positionMeta[String(tid)];
+  if (!m) return;
+  let html = '<span style="color:var(--accent3)">📅 ' + (m.openDate||'?') + '</span>';
+  if (m.closeDate) html += ' → <span style="color:var(--danger)">🔒 ' + m.closeDate + '</span>';
+  el.innerHTML = html;
+}
+
+// Updates the automatic IL panel for an active position
+function renderAutoIL(tid) {
+  const el   = document.getElementById('il-auto-' + tid);
+  const perf = positionPerf[String(tid)];
+  const meta = positionMeta[String(tid)];
+
+  // ── ROI badge in the header (visible even for closed positions) ──
+  const badgeEl = document.getElementById('roi-badge-' + tid);
+  if (badgeEl && perf && perf.roi != null) {
+    const rc = perf.roi >= 0 ? 'var(--accent3)' : 'var(--danger)';
+    const rb = perf.roi >= 0 ? 'rgba(16,185,129,.13)' : 'rgba(239,68,68,.13)';
+    badgeEl.innerHTML = `<span style="background:${rb};color:${rc};border:1px solid ${rc}55;
+      border-radius:99px;padding:2px 10px;font-size:10px;font-weight:700;
+      font-family:'Space Mono',monospace;margin-right:6px">
+      ROI ${perf.roi >= 0 ? '+' : ''}${fmt(perf.roi, 1)}%</span>`;
+  }
+
+  if (!el) return; // closed position: no active panel to fill
+
+  // No data yet
+  if (!perf) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 0"><span style="animation:pd 1s infinite">⏳</span> Computing…</div>';
+    return;
+  }
+  if (!perf.ilData && (!meta || !meta.deposits || !meta.deposits.length)) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 0">No on-chain deposit detected.</div>';
+    return;
+  }
+  if (!perf.ilData) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 0">⏳ Insufficient prices to compute IL / ROI.</div>';
+    return;
+  }
+
+  // Ghost position: still in "active" list (residual liq>0) but near-zero value with withdrawals detected
+  const meta2 = positionMeta[String(tid)] || {};
+  const livePos = positions.find(p => String(p.tid) === String(tid));
+  const lpNow = livePos && taoPrice != null ? livePos.taoAmt * taoPrice + livePos.usdcAmt : null;
+  if (lpNow != null && lpNow < 1.0 && (meta2.withdrawals||[]).length > 0) {
+    el.innerHTML = `<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.3);
+      border-radius:9px;padding:11px 14px;font-size:12px;color:var(--warn);line-height:1.7">
+      ⚠️ <strong>Ghost position</strong> — Near-zero residual liquidity detected, on-chain withdrawals confirmed.<br>
+      <span style="font-size:11px;color:var(--muted)">This position will be correctly classified as closed on next reload.</span>
+    </div>`;
+    return;
+  }
+
+  const { ilPct, hodlUsd, lpUsd } = perf.ilData;
+  const feesUsd  = perf.feesHistUSD || 0;
+  const netPnl   = feesUsd + (lpUsd - hodlUsd);
+  const ilColor  = ilPct >= 0 ? 'var(--accent3)' : ilPct > -3 ? 'var(--warn)' : 'var(--danger)';
+  const ilIcon   = ilPct >= 0 ? '▲' : '▼';
+  const pnlColor = netPnl >= 0 ? 'var(--accent3)' : 'var(--danger)';
+  const bar      = Math.min(Math.abs(ilPct) * 5, 100);
+  const depTaoFmt  = fmt(perf.depTao  || 0, 4);
+  const depUsdcFmt = fmt(perf.depUsdc || 0, 2);
+
+  // Bloc ROI
+  const roiHtml = perf.roi != null ? (() => {
+    const rc = perf.roi >= 0 ? 'var(--accent3)' : 'var(--danger)';
+    const rb = perf.roi >= 0 ? 'rgba(16,185,129,.07)' : 'rgba(239,68,68,.07)';
+    const sign = perf.roi >= 0 ? '+' : '';
+    const feesTot = perf.feesTotalUSD || perf.feesHistUSD || 0;
+    return `
+    <div style="background:${rb};border:1px solid ${rc}44;border-radius:10px;padding:12px 16px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div>
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;font-family:monospace;margin-bottom:6px">📈 Total Position ROI</div>
+          <div style="font-size:28px;font-weight:900;color:${rc};line-height:1">${sign}${fmt(perf.roi,2)}%</div>
+          <div style="font-size:11px;color:${rc};margin-top:4px">${sign}${usd(perf.roiUsd)} net</div>
+        </div>
+        <div style="font-size:11px;text-align:right">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:2px">Deposited → Total value</div>
+          <div style="font-weight:700">${usd(perf.depositedHistUSD)} → <span style="color:${rc}">${usd(perf.roiGross)}</span></div>
+          <div style="color:var(--muted);font-size:9px;margin-top:5px;margin-bottom:2px">LP · Fees · APR</div>
+          <div style="font-weight:600">${usd(lpUsd)} · <span style="color:var(--accent3)">${usd(feesTot)}</span>${perf.apr!=null?' · <span style="color:var(--accent3)">'+fmt(perf.apr,1)+'%/yr</span>':''}</div>
+        </div>
+      </div>
+    </div>`;
+  })() : '';
+
+  // Bloc IL
+  el.innerHTML = `
+  ${roiHtml}
+  <div style="background:${ilColor}12;border:1px solid ${ilColor}33;border-radius:9px;padding:11px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <span style="font-size:9px;color:var(--muted);font-family:monospace;text-transform:uppercase;letter-spacing:1px">Impermanent Loss · V3 on-chain</span>
+      <span style="font-size:17px;font-weight:800;color:${ilColor}">${ilIcon} ${fmt(ilPct,2)}%</span>
+    </div>
+    <div style="height:4px;background:var(--border);border-radius:99px;margin-bottom:9px;overflow:hidden">
+      <div style="height:100%;width:${bar}%;background:${ilColor};border-radius:99px"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px">
+      <div style="background:rgba(0,0,0,.2);border-radius:6px;padding:7px 9px">
+        <div style="color:var(--muted);font-size:9px;margin-bottom:3px">Deposited</div>
+        <div style="font-weight:700">${usd(hodlUsd)}</div>
+        <div style="color:var(--muted);font-size:9px">${depTaoFmt} TAO · ${depUsdcFmt} USDC</div>
+      </div>
+      <div style="background:rgba(0,0,0,.2);border-radius:6px;padding:7px 9px">
+        <div style="color:var(--muted);font-size:9px;margin-bottom:3px">LP Value</div>
+        <div style="font-weight:700">${usd(lpUsd)}</div>
+        <div style="color:${ilColor};font-size:9px">vs HODL ${usd(hodlUsd)}</div>
+      </div>
+      <div style="background:rgba(0,0,0,.2);border-radius:6px;padding:7px 9px">
+        <div style="color:var(--muted);font-size:9px;margin-bottom:3px">Net IL+fees</div>
+        <div style="font-weight:700;color:${pnlColor}">${usd(netPnl)}</div>
+        <div style="color:var(--muted);font-size:9px">fees ${usd(feesUsd)}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Injects fee history into an already-expanded position detail
+function renderHistoryInPosition(tid) {
+  const el = document.getElementById('hist-nft-' + tid);
+  if (!el) return;
+  const h = collectHist[String(tid)];
+  if (!h) return;
+  const isActive = positions.some(p => String(p.tid) === String(tid));
+  el.innerHTML = buildFullHistHTML(tid, h, positionMeta[String(tid)], isActive);
+}
+
+function buildCollectHistHTML(tid, h) {
+  const isActive = positions.some(p => String(p.tid) === String(tid));
+  return buildFullHistHTML(tid, h, positionMeta[String(tid)], isActive);
+}
+
+function buildFullHistHTML(tid, h, meta, isActive) {
+  const m = meta || {};
+  const collectEvents = (h && h.events) ? h.events : [];
+  const deposits    = m.deposits    || [];
+  const withdrawals = m.withdrawals || [];
+
+  // Cross-reference Collect vs DecreaseLiquidity by txHash
+  const withdrawalTxSet = new Set(withdrawals.map(e => (e.tx||'').toLowerCase()));
+  const pureCollects    = collectEvents.filter(e => !withdrawalTxSet.has((e.tx||'').toLowerCase()));
+  const withdrawCollects= collectEvents.filter(e =>  withdrawalTxSet.has((e.tx||'').toLowerCase()));
+
+  // Build unified timeline (chronological by block)
+  const allEvents = [
+    ...deposits.map(e       => ({...e, type:'deposit'})),
+    ...withdrawals.map(e    => ({...e, type:'withdrawal'})),
+    ...withdrawCollects.map(e => ({...e, type:'withdrawcollect'})),
+    ...pureCollects.map(e   => ({...e, type:'collect'})),
+  ].sort((a,b) => {
+    if (a.block && b.block) return a.block - b.block;
+    return 0;
+  });
+
+  // Resolve USD price for each event (historical price preferred over current)
+  const resolveUsd = (e) => {
+    const histP = e.ts ? histPriceFor(e.ts) : null;
+    const p = histP ?? taoPrice;
+    return p != null ? e.usdc + e.tao * p : null;
+  };
+  const resolveLabel = (e) => {
+    const histP = e.ts ? histPriceFor(e.ts) : null;
+    return histP != null ? ' <span style="font-size:8px;opacity:.6">hist.</span>' : '';
+  };
+
+  const rowStyle = 'border-bottom:1px solid rgba(255,255,255,.04)';
+  const rows = allEvents.map(e => {
+    const isDeposit        = e.type === 'deposit';
+    const isWithdrawal     = e.type === 'withdrawal';
+    const isCollect        = e.type === 'collect';
+    const isWithdrawCollect= e.type === 'withdrawcollect';
+    const typeIcon  = isDeposit ? '📥' : isWithdrawal ? '📤' : isWithdrawCollect ? '📤💰' : '💰';
+    const typeLabel = isDeposit ? 'Capital deposit'
+                    : isWithdrawal ? 'Capital withdrawal'
+                    : isWithdrawCollect ? 'Withdrawal + fees'
+                    : 'Collected fees';
+    const taoColor  = isCollect ? 'var(--accent3)'
+                    : isWithdrawCollect ? '#a78bfa'
+                    : isWithdrawal ? '#f59e0b' : '#94a3b8';
+    const eUsd = resolveUsd(e);
+    const histLbl = resolveLabel(e);
+    return `<tr style="${rowStyle}">
+      <td style="padding:5px 8px;color:var(--muted);font-size:10px;white-space:nowrap">${e.date}</td>
+      <td style="padding:5px 8px;font-size:10px;white-space:nowrap">
+        <span style="background:${isCollect?'rgba(16,185,129,.15)':isWithdrawCollect?'rgba(167,139,250,.15)':isWithdrawal?'rgba(245,158,11,.15)':'rgba(100,116,139,.15)'};
+          color:${isCollect?'var(--accent3)':isWithdrawCollect?'#a78bfa':isWithdrawal?'var(--warn)':'var(--muted)'};
+          padding:1px 6px;border-radius:99px;font-size:9px">${typeIcon} ${typeLabel}</span>
+      </td>
+      <td style="padding:5px 8px;color:${taoColor};font-size:11px;text-align:right;font-weight:600">${fmt(e.tao,4)} TAO</td>
+      <td style="padding:5px 8px;color:${taoColor};font-size:11px;text-align:right;font-weight:600">${fmt(e.usdc,2)} USDC</td>
+      <td style="padding:5px 8px;color:var(--muted);font-size:10px;text-align:right">${eUsd!=null?'≈'+usd(eUsd)+histLbl:'—'}</td>
+      <td style="padding:5px 8px;text-align:center">
+        <a href="https://evm.taostats.io/tx/${e.tx}" target="_blank"
+          style="color:var(--accent);font-size:10px;text-decoration:none">↗</a>
+      </td>
+    </tr>`;
+  }).join('');
+
+  if (!allEvents.length) {
+    return `<div style="color:var(--muted);font-size:12px;padding:8px 0;text-align:center">
+      No history available for this NFT.</div>`;
+  }
+
+  // ── Performance panel (closed positions only) ──
+  // For active positions, ROI/IL/APR are already shown by renderAutoIL
+  const perf = positionPerf[String(tid)];
+  let perfHTML = '';
+  if (!isActive && perf && perf.depositedKnown) {
+    const aprColor = perf.apr == null ? 'var(--muted)'
+      : perf.apr >= 20 ? 'var(--accent3)'
+      : perf.apr >= 5  ? 'var(--warn)'
+      : 'var(--danger)';
+    const priceQuality = perf.hasHistPrices
+      ? '<span style="color:var(--accent3);font-size:9px">● CryptoCompare historical prices</span>'
+      : '<span style="color:var(--warn);font-size:9px">● estimated at current price</span>';
+
+    const kpi = (label, val, sub, color='var(--text)') => `
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;min-width:120px">
+        <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;font-family:monospace">${label}</div>
+        <div style="font-size:16px;font-weight:800;color:${color}">${val}</div>
+        ${sub?`<div style="font-size:10px;color:var(--muted);margin-top:3px">${sub}</div>`:''}
+      </div>`;
+
+    // Bandeau ROI
+    let roiHeaderHTML = '';
+    if (perf.roi != null) {
+      const rc   = perf.roi >= 0 ? 'var(--accent3)' : 'var(--danger)';
+      const rb   = perf.roi >= 0 ? 'rgba(16,185,129,.08)' : 'rgba(239,68,68,.08)';
+      const sign = perf.roi >= 0 ? '+' : '';
+      const feesTot = perf.feesTotalUSD || perf.feesHistUSD || 0;
+      roiHeaderHTML = `
+      <div style="background:${rb};border:1px solid ${rc}44;border-radius:9px;padding:12px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div>
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;font-family:monospace;margin-bottom:4px">📈 Realized ROI</div>
+          <div style="font-size:28px;font-weight:900;color:${rc};line-height:1">${sign}${fmt(perf.roi,2)}%</div>
+          <div style="font-size:11px;color:${rc};margin-top:4px">${sign}${usd(perf.roiUsd)} net</div>
+        </div>
+        <div style="text-align:right;font-size:11px">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:2px">Deposited → Received</div>
+          <div style="font-weight:700">${usd(perf.depositedHistUSD)} → <span style="color:${rc}">${usd(perf.roiGross)}</span></div>
+          <div style="color:var(--muted);font-size:9px;margin-top:5px;margin-bottom:2px">Fees · APR</div>
+          <div style="font-weight:600"><span style="color:var(--accent3)">${usd(feesTot)}</span>${perf.apr!=null?' · <span style="color:var(--accent3)">'+fmt(perf.apr,1)+'%/yr</span>':''}</div>
+        </div>
+      </div>`;
+    }
+
+    // KPIs: Realized IL only (fees/APR/ROI already in the banner above)
+    let ilKpi = '';
+    if (perf.ilData) {
+      const { ilPct } = perf.ilData;
+      const ilC = ilPct >= 0 ? 'var(--accent3)' : ilPct > -3 ? 'var(--warn)' : 'var(--danger)';
+      const refPriceStr = perf.ilData.closePrice ? '@ $'+fmt(perf.ilData.closePrice) : 'at current price';
+      ilKpi = kpi('Realized IL', fmt(ilPct,2)+'%', refPriceStr, ilC);
+    }
+
+    perfHTML = `
+    ${roiHeaderHTML}
+    ${ilKpi ? `<div style="background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.12);border-radius:10px;padding:10px 14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+        <span style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:2px;font-family:monospace">📊 Analysis</span>
+        ${priceQuality}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${ilKpi}</div>
+    </div>` : ''}`;
+  }
+
+  return `
+  ${perfHTML}
+  <div style="font-size:9px;color:var(--muted);margin-bottom:8px;font-style:italic">
+    ⚠ Exact TAO/USDC amounts (on-chain) · USD = TAO price at time of operation if available, otherwise current price
+  </div>
+  <div style="overflow-x:auto;border-radius:7px;border:1px solid var(--border)">
+    <table style="width:100%;border-collapse:collapse;font-family:monospace">
+      <thead><tr style="background:var(--bg3)">
+        <th style="padding:5px 8px;font-size:9px;color:var(--muted);font-weight:500;text-align:left">DATE</th>
+        <th style="padding:5px 8px;font-size:9px;color:var(--muted);font-weight:500;text-align:left">TYPE</th>
+        <th style="padding:5px 8px;font-size:9px;color:var(--muted);font-weight:500;text-align:right">TAO</th>
+        <th style="padding:5px 8px;font-size:9px;color:var(--muted);font-weight:500;text-align:right">USDC</th>
+        <th style="padding:5px 8px;font-size:9px;color:var(--muted);font-weight:500;text-align:right">≈ USD</th>
+        <th style="padding:5px 8px;font-size:9px;color:var(--muted);font-weight:500">TX</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+const histLoading=new Set();
+// loadClosedHistory kept for backward compatibility (may be called if needed)
+// The scan is now automatic via scanAllCollectHistory
+async function loadClosedHistory(i, tid, btn){
+  // No-op — the auto scan has already populated collectHist[tid]
+  // Refresh display if history is available
+  const el=document.getElementById('hist-nft-'+tid);
+  if(el && collectHist[String(tid)]){
+    el.innerHTML=buildCollectHistHTML(tid, collectHist[String(tid)]);
+  } else if(el){
+    // Force fetch if not yet available
+    try {
+      const h=await fetchCollectHistory(tid);
+      el.innerHTML=buildCollectHistHTML(tid,h);
+    } catch(e){ dbg('loadClosedHistory #'+tid+': '+shortErr(e),'warn'); }
+  }
+  if(btn){ btn.style.display='none'; }
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+//  IL & GLOBAL STATS
+// ════════════════════════════════════════════════════════════════════
+function upIL(i,tid){
+  const ent=parseFloat(document.getElementById('ep'+i).value);
+  localStorage.setItem('il_'+tid,ent||'');
+  const pos=positions[i];
+  const il=(ent&&taoPrice)?calcIL(ent,taoPrice):null;
+  const tv=(pos&&taoPrice!=null)?pos.usdcAmt+pos.taoAmt*taoPrice:null;
+  document.getElementById('ilv'+i).textContent=il!=null?fmt(il,2)+'%':'—';
+  document.getElementById('ilf'+i).style.width=il!=null?Math.min(Math.abs(il)*4,100)+'%':'0%';
+  document.getElementById('ild'+i).textContent=(il!=null&&tv!=null)?usd(tv*il/100):'—';
+  updateGlobal(positions);
+}
+
+function updateGlobal(list){
+  if(!list.length){
+    ['stV','stF','stIL'].forEach(id=>document.getElementById(id).textContent='—');
+    document.getElementById('stS').textContent='0 positions'; return;
+  }
+  let tv=0, tf=0;
+  list.forEach(p=>{ if(taoPrice!=null){ tv+=p.usdcAmt+p.taoAmt*taoPrice; tf+=p.feesUsdc+p.feesTao*taoPrice; } });
+  document.getElementById('stV').textContent=taoPrice!=null?usd(tv):'—';
+  // Total collected fees — 3 sources:
+  //   1. feesHistUSD   : pure Collects (fees only, no withdrawals) — historical prices if available
+  //   2. wcFeesUSD     : fees isolated from withdrawal Collects (Collect − DecreaseLiquidity) — already computed in positionPerf
+  //   3. pendingFeesUSD: pending unclaimed fees (active positions)
+  // Priority: positionPerf (clean calculation) > raw events (fallback before scan completes)
+  const allTids=[...list.map(p=>String(p.tid)),...closedPositions.map(p=>String(p.tid))];
+  let fcUsdPerf = 0, fcUsdRaw = 0, fcTaoRaw = 0, fcUsdcRaw = 0;
+  let perfCount = 0, rawCount = 0;
+
+  for (const t of allTids) {
+    const perf = positionPerf[t];
+    if (perf && perf.feesKnown) {
+      // Full data available: pure fees + withdrawal fees + pending
+      fcUsdPerf += (perf.feesHistUSD || 0) + (perf.wcFeesUSD || 0) + (perf.pendingFeesUSD || 0);
+      perfCount++;
+    } else {
+      // Fallback: raw events (underestimates wcFees, but better than nothing)
+      const h = collectHist[t];
+      if (!h) continue;
+      const m = positionMeta[t];
+      let tao = 0, usdc = 0;
+      if (m && m.withdrawals && m.withdrawals.length) {
+        const wTxSet = new Set(m.withdrawals.map(e => (e.tx||'').toLowerCase()));
+        const pure = h.events.filter(e => !wTxSet.has((e.tx||'').toLowerCase()));
+        tao  = pure.reduce((s,e) => s + e.tao,  0);
+        usdc = pure.reduce((s,e) => s + e.usdc, 0);
+      } else {
+        tao  = h.totalTao;
+        usdc = h.totalUsdc;
+      }
+      fcTaoRaw  += tao;
+      fcUsdcRaw += usdc;
+      rawCount++;
+    }
+  }
+
+  // Combine both sources
+  const fcUsdFromRaw = taoPrice != null ? fcUsdcRaw + fcTaoRaw * taoPrice : fcUsdcRaw;
+  const fcUsd = fcUsdPerf + fcUsdFromRaw;
+  const stFC = document.getElementById('stFC');
+  const stFCsub = document.getElementById('stFCsub');
+  if (stFC) stFC.textContent = (fcUsdPerf > 0 || fcUsdFromRaw > 0) ? usd(fcUsd) : '$—';
+  if (stFCsub) {
+    const parts = [];
+    if (perfCount > 0) parts.push(perfCount + ' pos. analyzed');
+    if (rawCount  > 0) parts.push(rawCount + ' pending scan');
+    stFCsub.textContent = parts.join(' · ') || 'Auto-scan via getLogs';
+  }
+  document.getElementById('stS').textContent=list.length+' active(s)'+(closedPositions.length?' · '+closedPositions.length+' closed':'');
+  document.getElementById('stF').textContent=taoPrice!=null?usd(tf):'—';
+  // ── Global average IL — weighted by deposited capital ──
+  // Priority: positionPerf (V3 on-chain) > localStorage (manual entry, fallback)
+  // Includes both active AND closed positions for a complete view
+  const allActiveTids   = list.map(p => p.tid);
+  const allClosedTids   = closedPositions.map(p => p.tid);
+  const allTidsForIL    = [...allActiveTids, ...allClosedTids];
+
+  let ilWeightedSum = 0, ilWeightTotal = 0;
+  const ilDebug = [];
+  for (const tid of allTidsForIL) {
+    const perf = positionPerf[String(tid)];
+    if (!perf) { ilDebug.push('#'+tid+' → no perf data'); continue; }
+    if (!perf.ilData) { ilDebug.push('#'+tid+' → ilData=null (depTao='+fmt(perf.depTao||0,4)+' depUsdc='+fmt(perf.depUsdc||0,2)+' depUSD='+fmt(perf.depositedHistUSD||0)+')'); continue; }
+    if (perf.ilData.ilPct == null) { ilDebug.push('#'+tid+' → ilPct=null'); continue; }
+    if (!(perf.depositedHistUSD > 0)) { ilDebug.push('#'+tid+' → depositedHistUSD='+perf.depositedHistUSD); continue; }
+    ilDebug.push('#'+tid+' IL='+fmt(perf.ilData.ilPct,2)+'% w='+fmt(perf.depositedHistUSD));
+    ilWeightedSum  += perf.ilData.ilPct * perf.depositedHistUSD;
+    ilWeightTotal  += perf.depositedHistUSD;
+  }
+  dbg('IL global: total='+ilWeightTotal.toFixed(0)+' → '+ilDebug.join(' | '), ilWeightTotal>0?'ok':'warn');
+
+  // Fallback: if no on-chain data, use old manual localStorage calculation
+  if (ilWeightTotal === 0) {
+    const ils = list.map(p => {
+      const e = parseFloat(localStorage.getItem('il_'+p.tid)||'0');
+      return e ? calcIL(e, taoPrice) : null;
+    }).filter(v => v != null);
+    if (ils.length) {
+      const avg = ils.reduce((a,b)=>a+b,0) / ils.length;
+      document.getElementById('stIL').textContent = fmt(avg,2)+'%';
+      document.getElementById('stILb').textContent = avg<-5?'⚠️ High':avg<-1?'Moderate':'✓ Low';
+      document.getElementById('stILb').className = 'badge '+(avg<-5?'br':avg<-1?'by':'bg');
+    } else {
+      document.getElementById('stIL').textContent = '—';
+      document.getElementById('stILb').textContent = 'Computing…';
+      document.getElementById('stILb').className = 'badge bb';
+    }
+  } else {
+    const avgIL = ilWeightedSum / ilWeightTotal;
+    document.getElementById('stIL').textContent = fmt(avgIL,2)+'%';
+    document.getElementById('stILb').textContent = avgIL<-5?'⚠️ High':avgIL<-1?'Moderate':'✓ Low';
+    document.getElementById('stILb').className = 'badge '+(avgIL<-5?'br':avgIL<-1?'by':'bg');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  CONFIG MODALE
+// ════════════════════════════════════════════════════════════════════
+function openCfg(){ document.getElementById('ci0').value=CFG.NftManager||''; document.getElementById('ci1').value=CFG.Pool||''; document.getElementById('ci2').value=CFG.USDC||''; document.getElementById('ci3').value=CFG.WTAO||''; document.getElementById('cfgOverlay').classList.add('on'); }
+function closeCfg(){ document.getElementById('cfgOverlay').classList.remove('on'); }
+function vcf(el){ const v=el.value.trim(); el.classList.toggle('v',isAddr(v)); el.classList.toggle('e',v.length>0&&!isAddr(v)); }
+function saveCfg(){
+  const ids=['ci0','ci1','ci2','ci3'], keys=['NftManager','Pool','USDC','WTAO'], req=[true,true,true,false];
+  for(let i=0;i<4;i++){
+    const v=document.getElementById(ids[i]).value.trim();
+    if(req[i]&&!v){ toast(keys[i]+' required','error'); return; }
+    if(v&&!isAddr(v)){ toast(keys[i]+' invalid','error'); return; }
+    CFG[keys[i]]=v;
+  }
+  localStorage.setItem(CFG_KEY,JSON.stringify(CFG));
+  closeCfg(); updateCfgUI(); toast('Configuration saved ✓','success');
+}
+function updateCfgUI(){
+  document.getElementById('cfgA').textContent=CFG.NftManager?CFG.NftManager.slice(0,10)+'…':'—';
+  document.getElementById('cfgB').textContent=CFG.Pool?CFG.Pool.slice(0,10)+'…':'—';
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  DIAGNOSTIC (redirected to the execution log)
+// ════════════════════════════════════════════════════════════════════
+async function runDiag(){
+  dbg('━━━ DIAGNOSTIC ━━━','info');
+  dbg('ethers.js: '+(typeof ethers!=='undefined'?'✓ v'+ethers.version:'✗ NOT LOADED'), typeof ethers!=='undefined'?'ok':'err');
+  dbg('navigator.onLine: '+navigator.onLine, navigator.onLine?'ok':'err');
+  for(var i=0;i<RPCS.length;i++){
+    try{
+      var _p=new ethers.providers.StaticJsonRpcProvider(RPCS[i],NET);
+      var _n=await race(_p.getNetwork(),8000);
+      dbg('RPC '+RPCS[i].split('/')[2]+' → chainId='+_n.chainId,'ok');
+    }catch(e){ dbg('RPC '+RPCS[i].split('/')[2]+' → ✗ '+shortErr(e),'err'); }
+  }
+  try{
+    if(!rp) rp=await getProvider();
+    var s0=await race(pool().slot0(),10000);
+    dbg('pool.slot0() → tick='+s0[1],'ok');
+  }catch(e){ dbg('pool.slot0() → ✗ '+shortErr(e),'err'); }
+  try{
+    var _b=await race(nft().balanceOf('0x0000000000000000000000000000000000000001'),10000);
+    dbg('nft.balanceOf(0x1) → '+_b.toString(),'ok');
+  }catch(e){ dbg('nft.balanceOf() → ✗ '+shortErr(e),'err'); }
+  var val=(document.getElementById('inp')||{}).value||'';
+  dbg('Input field: "'+(val.trim()||'(empty)')+'" isAddr='+isAddr(val.trim()), isAddr(val.trim())?'ok':'warn');
+  dbg('━━━ END DIAGNOSTIC ━━━','info');
+}
+
+window.addEventListener('DOMContentLoaded',()=>{
+  updateCfgUI(); drawChips();
+  dbg('App started — waiting for ethers.js…','info');
+
+  // Wait for ethers to load (async CDN) before connecting
+  function waitForEthers(attempts) {
+    if (typeof ethers !== 'undefined') {
+      if (typeof initEthersConsts === 'function') initEthersConsts();
+      dbg('ethers.js ready — connecting RPC…','ok');
+      // RPC first (needed for contract calls), then price
+      getProvider()
+        .then(p => { rp = p; return fetchPrice(); })
+        .then(() => dbg('Ready ✓ — enter an EVM address','ok'))
+        .catch(e => dbg('Boot: ' + shortErr(e),'warn'));
+    } else if (attempts > 0) {
+      dbg('Waiting for ethers.js… ('+attempts+' attempts left)','warn');
+      setTimeout(()=>waitForEthers(attempts-1), 500);
+    } else {
+      dbg('⚠ ethers.js unavailable after 10s — reload the page','err');
+    }
+  }
+  waitForEthers(20); // 20 × 500ms = 10s max wait
+
+  setInterval(()=>{ if(rp&&!_busy) fetchPrice().catch(()=>{}); }, 60000);
+});
+</script>
+<!-- Modale Favoris -->
+<div class="fav-overlay" id="favOverlay" onclick="if(event.target===this)closeFavModal()">
+  <div class="fav-modal">
+    <h3>⭐ Add to Favorites</h3>
+    <div class="fav-addr" id="favModalAddr"></div>
+    <input id="favNameInput" type="text" placeholder="Wallet name (e.g. My main wallet)" maxlength="40"
+      onkeydown="if(event.key==='Enter')saveFavModal();if(event.key==='Escape')closeFavModal()">
+    <div class="fav-modal-btns">
+      <button class="btn btn-s" onclick="closeFavModal()">Cancel</button>
+      <button class="btn btn-p" onclick="saveFavModal()">Save</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
