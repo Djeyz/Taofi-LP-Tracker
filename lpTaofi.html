@@ -1088,13 +1088,16 @@ function calcIL(entry, cur) {
 // curTao/curUsdc : current tokens in pool (active) OR withdrawn tokens (closed)
 // price : TAO/USD price at evaluation time
 // Returns { ilPct, hodlUsd, lpUsd } or null
+// Note: IL is always ≤ 0 by mathematical definition (Uniswap V3 whitepaper).
+// Any tiny positive result is a floating-point artifact from on-chain integer precision → clamped to 0.
 function calcILv3(depTao, depUsdc, curTao, curUsdc, price) {
   if (!price || price <= 0) return null;
   if (depTao <= 0 && depUsdc <= 0) return null;
   const hodlUsd = depTao * price + depUsdc;
   const lpUsd   = curTao * price + curUsdc;
   if (hodlUsd <= 0) return null;
-  return { ilPct: ((lpUsd - hodlUsd) / hodlUsd) * 100, hodlUsd, lpUsd };
+  const ilPct = Math.min(0, ((lpUsd - hodlUsd) / hodlUsd) * 100); // clamp: IL ≤ 0 by definition
+  return { ilPct, hodlUsd, lpUsd };
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1949,8 +1952,9 @@ function renderAutoIL(tid) {
   const { ilPct, hodlUsd, lpUsd } = perf.ilData;
   const feesUsd  = perf.feesHistUSD || 0;
   const netPnl   = feesUsd + (lpUsd - hodlUsd);
-  const ilColor  = ilPct >= 0 ? 'var(--accent3)' : ilPct > -3 ? 'var(--warn)' : 'var(--danger)';
-  const ilIcon   = ilPct >= 0 ? '▲' : '▼';
+  const ilColor  = ilPct === 0 ? 'var(--muted)' : ilPct > -3 ? 'var(--warn)' : 'var(--danger)';
+  const ilIcon   = ilPct === 0 ? '—' : '▼';
+  const ilLabel  = ilPct === 0 ? '0.00%' : fmt(ilPct,2)+'%';
   const pnlColor = netPnl >= 0 ? 'var(--accent3)' : 'var(--danger)';
   const bar      = Math.min(Math.abs(ilPct) * 5, 100);
   const depTaoFmt  = fmt(perf.depTao  || 0, 4);
@@ -1986,7 +1990,7 @@ function renderAutoIL(tid) {
   <div style="background:${ilColor}12;border:1px solid ${ilColor}33;border-radius:9px;padding:11px 14px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
       <span style="font-size:9px;color:var(--muted);font-family:monospace;text-transform:uppercase;letter-spacing:1px">Impermanent Loss · V3 on-chain</span>
-      <span style="font-size:17px;font-weight:800;color:${ilColor}">${ilIcon} ${fmt(ilPct,2)}%</span>
+      <span style="font-size:17px;font-weight:800;color:${ilColor}">${ilIcon} ${ilLabel}</span>
     </div>
     <div style="height:4px;background:var(--border);border-radius:99px;margin-bottom:9px;overflow:hidden">
       <div style="height:100%;width:${bar}%;background:${ilColor};border-radius:99px"></div>
@@ -2144,9 +2148,10 @@ function buildFullHistHTML(tid, h, meta, isActive) {
     let ilKpi = '';
     if (perf.ilData) {
       const { ilPct } = perf.ilData;
-      const ilC = ilPct >= 0 ? 'var(--accent3)' : ilPct > -3 ? 'var(--warn)' : 'var(--danger)';
+      const ilC = ilPct === 0 ? 'var(--muted)' : ilPct > -3 ? 'var(--warn)' : 'var(--danger)';
+      const ilLbl = ilPct === 0 ? '0.00%' : fmt(ilPct,2)+'%';
       const refPriceStr = perf.ilData.closePrice ? '@ $'+fmt(perf.ilData.closePrice) : 'at current price';
-      ilKpi = kpi('Realized IL', fmt(ilPct,2)+'%', refPriceStr, ilC);
+      ilKpi = kpi('Realized IL', ilLbl, refPriceStr, ilC);
     }
 
     perfHTML = `
