@@ -4,7 +4,7 @@ A self-contained, read-only dashboard for monitoring **Uniswap V3 liquidity posi
 
 No wallet connection required — just enter any EVM address to inspect its LP positions.
 
-This dashboard was created with Claude sonnet 4.6 and almost entierly vite code.
+This dashboard was created with Claude sonnet 4.6 and almost entierly vibe coded.
 
 ---
 
