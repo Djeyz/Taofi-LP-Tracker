@@ -327,7 +327,7 @@ const NET          = {chainId:964, name:'bittensor'};
 const CALL_TIMEOUT = 28000;  // 28s per call
 const MAX_TRIES    = 6;        // 6 attempts for critical calls
 const LOOP_TRIES   = 5;        // 5 attempts — Bittensor RPC randomly returns data="0x"
-const RETRY_DELAY  = 4000;    // 4s between retries — let the node breathe
+const RETRY_DELAY  = 4000;    // 4s between retries — nodes need breathing room (reverted: 1.5s caused CALL_EXCEPTION cascade)
 const RPC_DELAY    = 1200;     // 1.2s between sequential calls
 const FAIL_DELAY   = 5000;    // 5s pause after failure
 
@@ -443,10 +443,58 @@ let positions = [], closedPositions = [];
 const collectHist = {};
 const positionMeta = {}; // { tid: {openDate,closeDate,deposits:[],withdrawals:[]} }
 const priceHistCache = {}; // { 'YYYY-MM-DD': priceUSD|null }
+const ohlcvCache    = {}; // { 'YYYY-MM-DD': {o,h,l,c} } — for candlestick charts
 const positionPerf = {};   // { tid: {depositedHistUSD, feesHistUSD, apr, daysOpen, hasHistPrices} }
 var SIG_TRANSFER;
 const blockTsCache = {};
 const HIST = 'taofi_hist';
+
+// ── Persistent cache (localStorage) for closed-position history ──────────
+// Closed positions are immutable — their history never changes after closure.
+// We persist collectHist + positionMeta per wallet address in localStorage.
+// Key: 'taofi_hist_<walletAddr>' / 'taofi_meta_<walletAddr>'
+const LSCACHE_VER = 'v1'; // bump to invalidate all caches
+function lsCacheKey(type, addr) { return 'taofi_'+type+'_'+addr.toLowerCase()+'_'+LSCACHE_VER; }
+
+function lsCacheLoad(type, addr) {
+  try {
+    const raw = localStorage.getItem(lsCacheKey(type, addr));
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch(_) { return {}; }
+}
+function lsCacheSave(type, addr, data) {
+  try { localStorage.setItem(lsCacheKey(type, addr), JSON.stringify(data)); } catch(_) {}
+}
+
+// Preload persistent caches into session caches for a given wallet
+function lsCachePreload(addr) {
+  const hist = lsCacheLoad('hist', addr);
+  for (const [tid, val] of Object.entries(hist)) {
+    if (!collectHist[tid]) collectHist[tid] = val;
+  }
+  const meta = lsCacheLoad('meta', addr);
+  for (const [tid, val] of Object.entries(meta)) {
+    if (!positionMeta[tid]) positionMeta[tid] = val;
+  }
+  const count = Object.keys(hist).length + Object.keys(meta).length;
+  if (count > 0) dbg('💾 Loaded '+Object.keys(hist).length+' hist + '+Object.keys(meta).length+' meta from localStorage cache', 'ok');
+}
+// Persist a single tid's history/meta to localStorage (only for closed positions)
+function lsCachePersistHist(addr, tid, isActive) {
+  if (isActive) return; // active positions mutate — never cache them
+  if (!collectHist[String(tid)]) return;
+  const store = lsCacheLoad('hist', addr);
+  store[String(tid)] = collectHist[String(tid)];
+  lsCacheSave('hist', addr, store);
+}
+function lsCachePersistMeta(addr, tid, isActive) {
+  if (isActive) return;
+  if (!positionMeta[String(tid)]) return;
+  const store = lsCacheLoad('meta', addr);
+  store[String(tid)] = positionMeta[String(tid)];
+  lsCacheSave('meta', addr, store);
+}
 
 // ════════════════════════════════════════════════════════════════════
 //  UTILS
@@ -777,7 +825,7 @@ async function fetchPositionsMulticall(tokenIds, sqrtP96, curTick, cancelled=nul
   for(var i=0;i<tokenIds.length;i++){
     if(cancelled && cancelled()) throw new LoadCancelledError();
     var tid=tokenIds[i];
-    await new Promise(r=>setTimeout(r,150));
+    await new Promise(r=>setTimeout(r,150)); // 150ms inter-call breathing room (reverted: 80ms caused node saturation)
     try {
       var p=await apiCall(CFG.NftManager,IFACE_NFT_,'positions',[tid],undefined,cancelled);
       dbg('positions('+tid+') ✓ [API]','ok');
@@ -946,6 +994,8 @@ async function fetchPositions(addr, gen){
   const cancelled = () => gen !== undefined && _loadGen !== gen;
   const list=document.getElementById('plist');
   list.innerHTML='<div class="empty"><div class="ei">🔄</div><h3>Searching for NFTs…</h3><p>Check the log below</p></div>';
+  // Preload persistent localStorage cache (closed positions history — immutable)
+  lsCachePreload(addr);
   try {
     // 1. balanceOf
     progress(52,'balanceOf (API)…');
@@ -1048,7 +1098,8 @@ async function fetchPositions(addr, gen){
     dbg('✓ '+cnt+' active(s), '+cntC+' closed — background fees scan','ok');
     // Automatic background fee scan (non-blocking)
     const allIds = [...positions.map(p=>p.tid), ...closedPositions.map(p=>p.tid)];
-    scanAllCollectHistory(allIds, gen).catch(e=>dbg('fees scan: '+shortErr(e),'warn'));
+    const activeSet = new Set(positions.map(p=>String(p.tid)));
+    scanAllCollectHistory(allIds, gen, addr, activeSet).catch(e=>dbg('fees scan: '+shortErr(e),'warn'));
 
   } catch(err){
     if(err instanceof LoadCancelledError){ dbg('fetchPositions: cancelled ✓','info'); return; }
@@ -1158,6 +1209,13 @@ function renderPos(list){
       </div>
     </div>
   </div>
+  </div>
+  <div id="chart-wrap-${pos.tid}" style="margin-top:10px;background:rgba(0,217,245,.03);border:1px solid rgba(0,217,245,.08);border-radius:8px;padding:10px 14px">
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;font-family:monospace;text-transform:uppercase;letter-spacing:1px">📈 Price Chart</div>
+    <div id="chart-${pos.tid}" style="position:relative;width:100%;border-radius:6px;overflow:visible;min-height:28px">
+      <div style="color:var(--muted);font-size:11px;opacity:.5">Expand to load chart…</div>
+    </div>
+  </div>
 </div>`;
     el.appendChild(c);
   });
@@ -1167,6 +1225,18 @@ function tog(i){
   const b=document.getElementById('pb'+i), h=document.getElementById('ph'+i), c=document.getElementById('cv'+i);
   const o=b.classList.contains('open');
   b.classList.toggle('open',!o); h.classList.toggle('open',!o); c.classList.toggle('open',!o);
+  // Lazy chart render — only on first open
+  if (!o) {
+    const pos = positions[i];
+    if (pos) {
+      const chartEl = document.getElementById('chart-' + pos.tid);
+      if (chartEl && !chartEl.dataset.chartDone) {
+        chartEl.dataset.chartDone = '1';
+        renderPriceChart(pos.tid, 'chart-' + pos.tid, pos, null, null)
+          .catch(() => { if (chartEl) chartEl.innerHTML = '<div style="color:var(--muted);font-size:11px">Chart unavailable</div>'; });
+      }
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1269,6 +1339,12 @@ async function togC(i){
     detEl.innerHTML=`
 ${_openStr||_closeStr ? '<div style="font-size:11px;font-family:monospace;margin-bottom:10px;min-height:18px" id="pos-dates-'+tid+'">' + _openStr + _closeStr + '</div>'
   : '<div style="font-size:11px;font-family:monospace;margin-bottom:10px;min-height:18px;color:var(--muted)" id="pos-dates-'+tid+'"><span style="opacity:.5">⏳ Loading dates…</span></div>'}
+<div style="margin-bottom:12px;background:rgba(0,217,245,.03);border:1px solid rgba(0,217,245,.08);border-radius:8px;padding:10px 14px">
+  <div style="font-size:10px;color:var(--muted);margin-bottom:8px;font-family:monospace;text-transform:uppercase;letter-spacing:1px">📈 Price Chart</div>
+  <div id="chart-${tid}" style="width:100%;border-radius:6px;overflow:hidden;min-height:28px">
+    <div style="color:var(--muted);font-size:11px;opacity:.5;display:flex;align-items:center;gap:5px"><span style="animation:pd 1s infinite">⏳</span> Preparing chart…</div>
+  </div>
+</div>
 <div class="pgrid" style="margin-bottom:12px">
   <div class="pi"><div class="pi-l">Range Min</div><div class="pi-v" style="font-size:15px">$${fmt(pos.pLow)}</div></div>
   <div class="pi"><div class="pi-l">Range Max</div><div class="pi-v" style="font-size:15px">$${fmt(pos.pHigh)}</div></div>
@@ -1294,6 +1370,13 @@ ${_openStr||_closeStr ? '<div style="font-size:11px;font-family:monospace;margin
       <div class="pval" style="font-size:14px;color:var(--muted)">${fv!=null&&hasFees?'$'+fmt(fv):'$0'}</div>
       <div class="chev open" id="cvc${i}">▼</div>`;
 
+    // Chart render — DOM is ready now (chart-${tid} exists inside detEl)
+    const _chartEl2 = document.getElementById('chart-' + tid);
+    if (_chartEl2 && !_chartEl2.dataset.chartDone) {
+      _chartEl2.dataset.chartDone = '1';
+      renderPriceChart(tid, 'chart-' + tid, pos, null, null)
+        .catch(() => { if (_chartEl2) _chartEl2.innerHTML = '<div style="color:var(--muted);font-size:11px">Chart unavailable</div>'; });
+    }
     dbg('togC #'+tid+' ✓ — history available via button','ok');
 
   } catch(err){
@@ -1302,6 +1385,304 @@ ${_openStr||_closeStr ? '<div style="font-size:11px;font-family:monospace;margin
   } finally { closedLoading.delete(i); }
 }
 
+// ════════════════════════════════════════════════════════════════
+//  PRICE CHART — Canvas (lazy, triggered on card open)
+// ════════════════════════════════════════════════════════════════
+// posData: { pLow, pHigh } — position price range
+// entryTs / exitTs: unix timestamps (null if unknown)
+async function renderPriceChart(tid, containerId, posData, entryTs, exitTs) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+
+  // Entry/exit from metadata (override if explicitly passed)
+  const meta = positionMeta[String(tid)];
+  if (!entryTs && meta) {
+    const deps = (meta.deposits || []).filter(e => e.ts).sort((a,b) => a.ts - b.ts);
+    entryTs = deps.length ? deps[0].ts : null;
+  }
+  if (!exitTs && meta) {
+    const wits = (meta.withdrawals || []).filter(e => e.ts).sort((a,b) => b.ts - a.ts);
+    exitTs = wits.length ? wits[0].ts : null;
+  }
+
+  const nowTs   = Math.floor(Date.now() / 1000);
+  const refEnd  = exitTs || nowTs;
+  const refStart= entryTs ? entryTs - 30 * 86400 : nowTs - 120 * 86400;
+
+  wrap.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:10px 0;display:flex;align-items:center;gap:6px"><span style="animation:pd 1s infinite">⏳</span> Loading chart…</div>';
+
+  // Fetch OHLCV if needed
+  await fetchOHLCVForPosition(refStart, refEnd);
+
+  // Build sorted candle array for [refStart-2d .. refEnd+7d]
+  const plotStart = refStart - 2 * 86400;
+  const plotEnd   = Math.min(refEnd + 7 * 86400, nowTs + 86400);
+  const candles = [];
+  let t = plotStart;
+  while (t <= plotEnd) {
+    const dk = dayKey(t);
+    const pt = ohlcvCache[dk];
+    if (pt && pt.c > 0) candles.push({ t, dk, ...pt });
+    t += 86400;
+  }
+
+  if (candles.length < 3) {
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:10px 0;text-align:center">Données de prix indisponibles</div>';
+    return;
+  }
+
+  // Aggregate candles if too many (max 160 displayed)
+  const MAX_C = 160;
+  const step  = Math.max(1, Math.ceil(candles.length / MAX_C));
+  const dc    = []; // display candles
+  for (let i = 0; i < candles.length; i += step) {
+    const g = candles.slice(i, i + step);
+    dc.push({ t: g[0].t, dk: g[0].dk,
+      o: g[0].o, h: Math.max(...g.map(x => x.h)), l: Math.min(...g.map(x => x.l)), c: g[g.length-1].c });
+  }
+
+  // Y range (include range band + 3% margin)
+  const prices = dc.flatMap(c => [c.h, c.l]).filter(Boolean);
+  const pLow = posData?.pLow, pHigh = posData?.pHigh;
+  if (pLow  && pLow  > 0) prices.push(pLow);
+  if (pHigh && pHigh > 0) prices.push(pHigh);
+  const rawMin = Math.min(...prices), rawMax = Math.max(...prices);
+  const pad   = (rawMax - rawMin) * 0.05;
+  const yMin  = rawMin - pad, yMax = rawMax + pad;
+
+  // Canvas dimensions
+  const W  = Math.max(wrap.offsetWidth || 560, 320);
+  const H  = 230;
+  const PL = 56, PR = 10, PT = 14, PB = 30;
+  const CW = W - PL - PR, CH = H - PT - PB;
+
+  wrap.innerHTML = `<canvas id="cv-${tid}" width="${W}" height="${H}" style="width:100%;display:block;border-radius:8px;cursor:crosshair"></canvas>`;
+  const canvas = document.getElementById('cv-' + tid);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const xS   = i => PL + (i / (dc.length - 1 || 1)) * CW;
+  const yS   = v => PT + ((yMax - v) / (yMax - yMin || 1)) * CH;
+  const tsIdx = ts => {
+    const dk2 = dayKey(ts);
+    let best = 0;
+    for (let i = 0; i < dc.length; i++) { if (dc[i].dk <= dk2) best = i; else break; }
+    return best;
+  };
+
+  // ── Background ──────────────────────────────────────────────
+  ctx.fillStyle = '#090e1b';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Grid (Y) ────────────────────────────────────────────────
+  ctx.setLineDash([2, 4]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.055)';
+  ctx.lineWidth = 1;
+  const YTICKS = 5;
+  for (let i = 0; i <= YTICKS; i++) {
+    const v = yMin + (yMax - yMin) * (i / YTICKS);
+    const y = yS(v);
+    ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(PL + CW, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(100,116,139,0.8)';
+    ctx.font = '9px "Space Mono",monospace';
+    ctx.textAlign = 'right';
+    const label = v >= 1000 ? '$' + (v/1000).toFixed(2) + 'k' : '$' + v.toFixed(0);
+    ctx.fillText(label, PL - 4, y + 3);
+  }
+  ctx.setLineDash([]);
+
+  // ── Range band (pLow–pHigh) ──────────────────────────────────
+  if (pLow && pHigh) {
+    const yL = yS(Math.min(pHigh, yMax));
+    const yH = yS(Math.max(pLow,  yMin));
+    // Filled band
+    const grad = ctx.createLinearGradient(0, yL, 0, yH);
+    grad.addColorStop(0, 'rgba(0,229,255,0.10)');
+    grad.addColorStop(1, 'rgba(0,229,255,0.02)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(PL, yL, CW, yH - yL);
+    // pHigh line
+    if (pHigh < yMax && pHigh > yMin) {
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(0,229,255,0.50)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PL, yS(pHigh)); ctx.lineTo(PL + CW, yS(pHigh)); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // pLow line
+    if (pLow < yMax && pLow > yMin) {
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(0,229,255,0.50)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PL, yS(pLow)); ctx.lineTo(PL + CW, yS(pLow)); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // ── Active period shading (entry → exit) ────────────────────
+  if (entryTs) {
+    const xi   = tsIdx(entryTs);
+    const xEnd = exitTs ? tsIdx(exitTs) : dc.length - 1;
+    const x1   = xS(xi), x2 = xS(xEnd);
+    ctx.fillStyle = 'rgba(16,185,129,0.06)';
+    ctx.fillRect(x1, PT, x2 - x1, CH);
+  }
+
+  // ── Candlesticks ────────────────────────────────────────────
+  const cw = Math.max(1.5, (CW / dc.length) * 0.55);
+  for (let i = 0; i < dc.length; i++) {
+    const c  = dc[i];
+    const x  = xS(i);
+    const up = c.c >= c.o;
+    const col = up ? '#10b981' : '#ef4444';
+    // Wick
+    ctx.strokeStyle = col + 'cc'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, yS(c.h)); ctx.lineTo(x, yS(c.l)); ctx.stroke();
+    // Body
+    const bt = yS(Math.max(c.o, c.c)), bb = yS(Math.min(c.o, c.c));
+    ctx.fillStyle = col + (up ? '99' : 'bb');
+    ctx.fillRect(x - cw/2, bt, cw, Math.max(1, bb - bt));
+  }
+
+  // ── Helper: draw a flag badge on the vertical line ────────────
+  // anchor = 'top' pins badge at top of chart; 'price' pins at the actual price level
+  function drawFlag(x, priceY, label, priceLabel, bgColor, anchor) {
+    const BADGE_H = 16, BADGE_PAD = 5, TICK_H = 6;
+    const fullLabel = priceLabel ? label + ' ' + priceLabel : label;
+    ctx.font = 'bold 9px "Space Mono",monospace';
+    const tw = ctx.measureText(fullLabel).width;
+    const bw = tw + BADGE_PAD * 2;
+
+    // Badge Y: top anchor = top of chart + small margin; price anchor = near price
+    let by;
+    if (anchor === 'top') {
+      by = PT + 4;
+    } else {
+      by = Math.max(PT + 4, Math.min(PT + CH - BADGE_H - TICK_H - 2, priceY - BADGE_H - TICK_H - 2));
+    }
+
+    // Clamp X so badge stays inside chart
+    let bx = x - bw / 2;
+    bx = Math.max(PL + 2, Math.min(PL + CW - bw - 2, bx));
+
+    // Vertical line from badge bottom tip to bottom of chart
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = bgColor + 'bb';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, by + BADGE_H + TICK_H);
+    ctx.lineTo(x, PT + CH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Dot at actual price Y (clamped to chart area)
+    const dotY = Math.max(PT + 4, Math.min(PT + CH - 4, priceY));
+    ctx.fillStyle = bgColor;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(x, dotY, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+    // Badge pill background
+    ctx.fillStyle = bgColor;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, bw, BADGE_H, 3);
+    ctx.fill();
+
+    // Triangle pointer downward from badge
+    ctx.beginPath();
+    ctx.moveTo(x - 4, by + BADGE_H);
+    ctx.lineTo(x + 4, by + BADGE_H);
+    ctx.lineTo(x, by + BADGE_H + TICK_H);
+    ctx.closePath();
+    ctx.fill();
+
+    // Badge text
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 9px "Space Mono",monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(fullLabel, bx + BADGE_PAD, by + BADGE_H - 4);
+  }
+
+  // ── Entry marker ────────────────────────────────────────────
+  if (entryTs) {
+    const xi  = tsIdx(entryTs);
+    const x   = xS(xi);
+    const ep  = histPriceFor(entryTs) || taoPrice || ((pLow + pHigh) / 2);
+    const priceY = ep ? yS(ep) : PT + CH * 0.5;
+    // Anchor at top when price is near top (within top 25% of chart)
+    const anchor = (priceY < PT + CH * 0.25) ? 'top' : 'price';
+    drawFlag(x, priceY, '▶ IN', '', '#10b981', anchor);
+  }
+
+  // ── Exit marker ─────────────────────────────────────────────
+  if (exitTs) {
+    const wi  = tsIdx(exitTs);
+    const x   = xS(wi);
+    const ep  = histPriceFor(exitTs) || taoPrice || ((pLow + pHigh) / 2);
+    const priceY = ep ? yS(ep) : PT + CH * 0.5;
+    const anchor = (priceY < PT + CH * 0.25) ? 'top' : 'price';
+    drawFlag(x, priceY, '◀ OUT', '', '#ef4444', anchor);
+  }
+
+  // ── Current price line (active position) ────────────────────
+  if (!exitTs && taoPrice) {
+    const y = yS(taoPrice);
+    ctx.setLineDash([2, 3]); ctx.strokeStyle = 'rgba(0,229,255,0.8)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(PL + CW, y); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // ── X axis labels ────────────────────────────────────────────
+  ctx.fillStyle = 'rgba(100,116,139,0.7)';
+  ctx.font = '9px "Space Mono",monospace';
+  ctx.textAlign = 'center';
+  const NX = Math.min(7, dc.length);
+  for (let i = 0; i < NX; i++) {
+    const idx = Math.floor(i * (dc.length - 1) / (NX - 1 || 1));
+    const x   = xS(idx);
+    ctx.fillText(dc[idx].dk.slice(5), x, H - 10);
+  }
+
+  // ── Chart subtitle ──────────────────────────────────────────
+  ctx.fillStyle = 'rgba(100,116,139,0.5)';
+  ctx.font = '8px "Space Mono",monospace';
+  ctx.textAlign = 'left';
+  const totalDays = dc.length * step;
+  ctx.fillText('TAO/USD · ' + totalDays + 'd · ' + (step > 1 ? step+'d candles' : 'daily'), PL + 3, PT + 10);
+
+  // Tag canvas: was entry data available when drawn?
+  if (canvas) canvas.dataset.hasEntry = entryTs ? '1' : '0';
+
+  // ── Tooltip on mousemove ─────────────────────────────────────
+  canvas.addEventListener('mousemove', function(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mx   = (e.clientX - rect.left) * (W / rect.width) - PL;
+    if (mx < 0 || mx > CW) return;
+    const idx = Math.min(dc.length - 1, Math.max(0, Math.round(mx / CW * (dc.length - 1))));
+    const c   = dc[idx];
+    if (!c) return;
+    // Redraw chart (simplified: just draw tooltip overlay)
+    // We draw a vertical crosshair + tooltip box
+    // First, save/restore is not practical for full redraw here; use overlay canvas instead
+    // Lightweight: just show in a tooltip div
+    let tip = document.getElementById('chart-tip-' + tid);
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'chart-tip-' + tid;
+      tip.style.cssText = 'position:absolute;background:#0d1829;border:1px solid #1e2d45;border-radius:6px;padding:5px 9px;font-size:10px;font-family:"Space Mono",monospace;color:#e2e8f0;pointer-events:none;z-index:10;white-space:nowrap;line-height:1.6';
+      wrap.style.position = 'relative';
+      wrap.appendChild(tip);
+    }
+    tip.style.display  = 'block';
+    tip.style.left     = Math.min(e.clientX - rect.left + 10, rect.width - 150) + 'px';
+    tip.style.top      = '12px';
+    const isUp = c.c >= c.o;
+    tip.innerHTML = `<span style="color:#64748b">${c.dk}</span><br>
+      O <span style="color:${isUp?'#10b981':'#ef4444'}">${fmt(c.o)}</span> &nbsp;
+      H <span style="color:#10b981">${fmt(c.h)}</span> &nbsp;
+      L <span style="color:#ef4444">${fmt(c.l)}</span> &nbsp;
+      C <span style="color:${isUp?'#10b981':'#ef4444'};font-weight:700">${fmt(c.c)}</span>`;
+  });
+  canvas.addEventListener('mouseleave', function() {
+    const tip = document.getElementById('chart-tip-' + tid);
+    if (tip) tip.style.display = 'none';
+  });
+}
 // Phase 2 (on-demand): explorer link — getLogs not supported by Bittensor RPCs
 
 // ════════════════════════════════════════════════════════════════
@@ -1400,7 +1781,7 @@ async function fetchCollectHistory(tid) {
   // Attempt 3: API v2 /addresses/{addr}/logs (alternate Blockscout format)
   if (events.length === 0) {
     try {
-      let next = null, loops = 0;
+      let next = null, loops = 0, emptyStreakE3 = 0;
       while (loops++ < 20) {
         let url = BASE_V2 + '/addresses/' + CFG.NftManager + '/logs'
           + '?topic=' + SIG_COLLECT;
@@ -1417,6 +1798,12 @@ async function fetchCollectHistory(tid) {
           })), true);
           events.push(...filtered);
           dbg('  → '+filtered.length+'/'+items.length+' pour NFT#'+tid, 'info');
+          // Circuit-breaker: 2 consecutive pages with 0 matching → this NFT has no events here
+          if (filtered.length === 0) { emptyStreakE3++; } else { emptyStreakE3 = 0; }
+          if (emptyStreakE3 >= 2) { dbg('v2 logs e3 NFT#'+tid+' → 0 match over 2 pages, aborting', 'warn'); break; }
+        } else {
+          // No items at all → end of logs
+          break;
         }
         next = json.next_page_params || null;
         if (!next) break;
@@ -1627,6 +2014,10 @@ async function fetchHistoricalPriceRange(allTsSet) {
         priceHistCache[dk] = pt.close;
         found++;
       }
+      // Also store full OHLCV for candlestick charts
+      if (ohlcvCache[dk] === undefined && pt.open && pt.high && pt.low && pt.close) {
+        ohlcvCache[dk] = { o: pt.open, h: pt.high, l: pt.low, c: pt.close };
+      }
     }
     dbg('Historical prices loaded: '+found+' days', 'ok');
     // Mark requested days absent from response as null (avoids re-fetching)
@@ -1660,6 +2051,30 @@ function histPriceFor(ts) {
   const dk2 = dayKey(ts + 86400);
   if (priceHistCache[dk2] != null) return priceHistCache[dk2];
   return null;
+}
+
+// Fetches OHLCV for a single position's date range (lazy, only on chart open)
+// startTs: ~30 days before entry, endTs: exit (or now)
+async function fetchOHLCVForPosition(startTs, endTs) {
+  const nowTs  = Math.floor(Date.now() / 1000);
+  const clampEnd = Math.min(endTs + 7 * 86400, nowTs);
+  const clampStart = startTs - 30 * 86400;
+  // Check coverage: if both ends already cached, skip fetch
+  const dkStart = dayKey(clampStart), dkEnd = dayKey(clampEnd);
+  if (ohlcvCache[dkStart] !== undefined && ohlcvCache[dkEnd] !== undefined) return;
+  const days = Math.ceil((clampEnd - clampStart) / 86400) + 4;
+  const toTs  = Math.floor(new Date(dayKey(clampEnd) + 'T23:59:59Z').getTime() / 1000);
+  try {
+    const url = `https://min-api.cryptocompare.com/data/v2/histoday?fsym=TAO&tsym=USD&limit=${Math.min(days, 2000)}&toTs=${toTs}`;
+    const resp = await fetchAPI(url, 15000);
+    const data = resp?.Data?.Data || [];
+    for (const pt of data) {
+      if (!pt.time || !pt.close) continue;
+      const dk = dayKey(pt.time);
+      if (ohlcvCache[dk] === undefined) ohlcvCache[dk] = { o: pt.open, h: pt.high, l: pt.low, c: pt.close };
+      if (priceHistCache[dk] === undefined) priceHistCache[dk] = pt.close;
+    }
+  } catch(e) { dbg('OHLCV chart fetch: ' + shortErr(e), 'warn'); }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1814,7 +2229,7 @@ function computePositionPerf(h, m, activePosData) {
 }
 
 
-async function scanAllCollectHistory(tokenIds, gen) {
+async function scanAllCollectHistory(tokenIds, gen, walletAddr, activeSet) {
   const cancelled = () => gen !== undefined && _loadGen !== gen;
   dbg('Full history scan (' + tokenIds.length + ' NFTs)…', 'info');
 
@@ -1822,13 +2237,17 @@ async function scanAllCollectHistory(tokenIds, gen) {
   const histMap = {}, metaMap = {};
   for (const tid of tokenIds) {
     if(cancelled()) { dbg('Scan cancelled (gen change)','warn'); return; }
+    const isActive = activeSet && activeSet.has(String(tid));
     try {
       histMap[tid]  = await fetchCollectHistory(tid);
       dbg('Fees NFT#'+tid+': '+histMap[tid].events.length+' events', 'ok');
+      // Persist to localStorage if closed (immutable — cache forever)
+      if (walletAddr && !isActive) lsCachePersistHist(walletAddr, tid, false);
       await new Promise(r=>setTimeout(r,200));
       metaMap[tid] = await fetchPositionMeta(tid);
       dbg('Meta NFT#'+tid+': open='+metaMap[tid].openDate
         +' dep='+metaMap[tid].deposits.length+' wit='+metaMap[tid].withdrawals.length, 'ok');
+      if (walletAddr && !isActive) lsCachePersistMeta(walletAddr, tid, false);
       renderPositionDates(tid);
     } catch(e) { dbg('scan NFT#'+tid+': '+shortErr(e),'warn'); }
     await new Promise(r=>setTimeout(r,200));
@@ -1975,8 +2394,9 @@ function renderAutoIL(tid) {
           <div style="font-size:11px;color:${rc};margin-top:4px">${sign}${usd(perf.roiUsd)} net</div>
         </div>
         <div style="font-size:11px;text-align:right">
-          <div style="color:var(--muted);font-size:9px;margin-bottom:2px">Deposited → Total value</div>
+          <div style="color:var(--muted);font-size:9px;margin-bottom:2px">Cost basis → Total value</div>
           <div style="font-weight:700">${usd(perf.depositedHistUSD)} → <span style="color:${rc}">${usd(perf.roiGross)}</span></div>
+          <div style="color:var(--muted);font-size:8px;margin-top:1px;font-style:italic">TAO valued at price on deposit date${(()=>{const dep1=(meta&&meta.deposits||[]).filter(e=>e.tx).sort((a,b)=>a.ts-b.ts);return dep1.length?` · <a href="https://evm.taostats.io/tx/${dep1[0].tx}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-style:normal">↗ tx</a>`:'';})()}</div>
           <div style="color:var(--muted);font-size:9px;margin-top:5px;margin-bottom:2px">LP · Fees · APR</div>
           <div style="font-weight:600">${usd(lpUsd)} · <span style="color:var(--accent3)">${usd(feesTot)}</span>${perf.apr!=null?' · <span style="color:var(--accent3)">'+fmt(perf.apr,1)+'%/yr</span>':''}</div>
         </div>
@@ -1997,7 +2417,7 @@ function renderAutoIL(tid) {
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px">
       <div style="background:rgba(0,0,0,.2);border-radius:6px;padding:7px 9px">
-        <div style="color:var(--muted);font-size:9px;margin-bottom:3px">Deposited</div>
+        <div style="color:var(--muted);font-size:9px;margin-bottom:3px">HODL Ref. <span style="font-size:8px;opacity:.6;font-style:italic">(current price)</span></div>
         <div style="font-weight:700">${usd(hodlUsd)}</div>
         <div style="color:var(--muted);font-size:9px">${depTaoFmt} TAO · ${depUsdcFmt} USDC</div>
       </div>
@@ -2012,7 +2432,37 @@ function renderAutoIL(tid) {
         <div style="color:var(--muted);font-size:9px">fees ${usd(feesUsd)}</div>
       </div>
     </div>
+  </div>
+  <div style="margin-top:10px;background:rgba(0,217,245,.04);border:1px solid rgba(0,217,245,.1);border-radius:8px;padding:10px 14px">
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;font-family:monospace;text-transform:uppercase;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center">
+      <span>📋 History & Performance</span>
+      <a href="https://evm.taostats.io/token/${CFG.NftManager}/instance/${tid}" target="_blank" rel="noopener"
+        style="color:var(--muted);font-size:10px;text-decoration:none">NFT#${tid} ↗</a>
+    </div>
+    <div id="hist-nft-${tid}">
+      ${collectHist[String(tid)]
+        ? buildFullHistHTML(tid, collectHist[String(tid)], meta, true)
+        : '<div style="color:var(--muted);font-size:11px;display:flex;align-items:center;gap:6px"><span style="animation:pd 1s infinite">⏳</span> Scanning…</div>'
+      }
+    </div>
   </div>`;
+
+  // ── Re-render chart if it was drawn before entry data was available ──
+  // (positionMeta arrives async from background scan, often after first tog())
+  const _chartCanvas = document.getElementById('cv-' + tid);
+  if (_chartCanvas && _chartCanvas.dataset.hasEntry === '0') {
+    const _meta2 = positionMeta[String(tid)];
+    const _hasEntry = _meta2 && _meta2.deposits && _meta2.deposits.some(e => e.ts);
+    if (_hasEntry) {
+      const _posIdx = positions.findIndex(p => String(p.tid) === String(tid));
+      if (_posIdx >= 0) {
+        const _chartWrap = document.getElementById('chart-' + tid);
+        if (_chartWrap) {
+          renderPriceChart(tid, 'chart-' + tid, positions[_posIdx], null, null).catch(()=>{});
+        }
+      }
+    }
+  }
 }
 
 // Injects fee history into an already-expanded position detail
